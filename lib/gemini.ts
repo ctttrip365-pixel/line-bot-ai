@@ -6,7 +6,7 @@ import { GoogleGenAI } from '@google/genai';
 import { buildSystemPrompt } from './prompts';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
-const MODEL = 'gemini-2.5-flash-preview-05-20';
+const MODEL = 'gemini-2.0-flash';
 
 export const DEFAULT_REPLY =
   'ขออภัยนะครับ ขอเวลาเช็คให้สักครู่ได้เลยครับ 🙏 หรือโทรหาพี่แชมป์ได้เลยครับ';
