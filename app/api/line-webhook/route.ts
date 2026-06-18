@@ -63,7 +63,7 @@ export async function POST(req: NextRequest) {
 
       // 6. Reply back to LINE
       try {
-        await replyText(event.replyToken, reply);
+        await replyText(event.replyToken!, reply);
       } catch (err) {
         // LINE will retry if we return non-200; log and fall through to 200
         console.error('[webhook] reply error:', err);
