@@ -1,94 +1,69 @@
-interface FaqRow {
-  question: string;
-  answer: string;
-  category: string;
+// lib/sheet.ts — FAQ cache (60-sec TTL + stale fallback)
+// CSV format: question, answer, category (column A, B, C)
+
+let cache: { text: string; expiresAt: number } | null = null;
+const CACHE_TTL_MS = 60_000; // 60 วินาที
+
+export async function fetchFAQ(): Promise<string> {
+  const now = Date.now();
+  if (cache && cache.expiresAt > now) return cache.text;
+
+  try {
+    const url = process.env.SHEET_CSV_URL;
+    if (!url) throw new Error('SHEET_CSV_URL not set');
+
+    const res = await fetch(url, {
+      cache: 'no-store', // bypass Next.js cache · จัดการ cache เอง
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) throw new Error(`sheet fetch failed: ${res.status}`);
+
+    const csv = await res.text();
+    const text = csvToFaqText(csv);
+
+    cache = { text, expiresAt: now + CACHE_TTL_MS };
+    return text;
+  } catch (err) {
+    // Graceful fallback · ถ้า fetch ล้ม ใช้ cache เก่าถ้ามี
+    if (cache) {
+      console.warn('[sheet] fetch failed · serving stale cache', err);
+      return cache.text;
+    }
+    throw err;
+  }
 }
 
-interface Cache {
-  data: FaqRow[];
-  timestamp: number;
-}
-
-const CACHE_TTL_MS = 60 * 60 * 1000; // 60 minutes
-
-let cache: Cache | null = null;
-
-function parseCsv(csv: string): FaqRow[] {
-  const lines = csv.trim().split(/\r?\n/);
-  if (lines.length < 2) return [];
-
-  const headers = splitCsvLine(lines[0]);
-
+function csvToFaqText(csv: string): string {
+  // CSV columns: question (A), answer (B), category (C)
+  const lines = csv.split('\n').slice(1); // skip header row
   return lines
-    .slice(1)
+    .filter((line) => line.trim())
     .map((line) => {
-      const values = splitCsvLine(line);
-      const row: Record<string, string> = {};
-      headers.forEach((h, i) => {
-        row[h] = values[i] ?? '';
-      });
-      return {
-        question: row['question'] ?? '',
-        answer: row['answer'] ?? '',
-        category: row['category'] ?? '',
-      };
+      const [question, answer, category] = parseCSVLine(line);
+      if (!question || !answer) return null;
+      return `[${category || 'ทั่วไป'}] ${question}\n→ ${answer}`;
     })
-    .filter((r) => r.question.trim() !== '');
+    .filter(Boolean)
+    .join('\n\n');
 }
 
-function splitCsvLine(line: string): string[] {
-  const values: string[] = [];
+function parseCSVLine(line: string): [string, string, string] {
+  // CSV parser รองรับ quoted fields ที่มีลูกน้ำข้างใน
+  const result: string[] = [];
   let current = '';
   let inQuotes = false;
 
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === '"') {
-      // handle escaped double-quote ""
-      if (inQuotes && line[i + 1] === '"') {
-        current += '"';
-        i++;
-      } else {
-        inQuotes = !inQuotes;
-      }
-    } else if (ch === ',' && !inQuotes) {
-      values.push(current.trim());
+  for (const char of line) {
+    if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if ((char === ',' || char === '\t') && !inQuotes) {
+      result.push(current.trim());
       current = '';
     } else {
-      current += ch;
+      current += char;
     }
   }
-  values.push(current.trim());
-  return values;
-}
+  result.push(current.trim());
 
-function formatFaq(rows: FaqRow[]): string {
-  return rows.map((r) => `Q: ${r.question}\nA: ${r.answer}`).join('\n\n');
-}
-
-export async function getFaqText(): Promise<string> {
-  const now = Date.now();
-
-  if (cache && now - cache.timestamp < CACHE_TTL_MS) {
-    return formatFaq(cache.data);
-  }
-
-  try {
-    const res = await fetch(process.env.SHEET_CSV_URL!, { cache: 'no-store' });
-    if (!res.ok) throw new Error(`Sheet HTTP ${res.status}`);
-
-    const csv = await res.text();
-    const data = parseCsv(csv);
-    cache = { data, timestamp: now };
-    return formatFaq(data);
-  } catch (err) {
-    console.error('[sheet] fetch error:', err);
-
-    if (cache) {
-      console.warn('[sheet] falling back to stale cache');
-      return formatFaq(cache.data);
-    }
-
-    return '(ไม่สามารถโหลดข้อมูล FAQ ได้)';
-  }
+  return [result[0] || '', result[1] || '', result[2] || ''];
 }
