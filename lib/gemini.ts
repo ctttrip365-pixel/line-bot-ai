@@ -1,67 +1,69 @@
+// lib/gemini.ts — Gemini wrapper (timeout · truncation guard · token logging)
+// ⚠️ gemini-2.5-flash: maxOutputTokens นับ output อย่างเดียว · 200 พอ
+// ⚠️ gemini-2.5-flash-preview / 3.x: นับ thinking + output รวม · ต้องตั้ง 1024+
+
 import { GoogleGenAI } from '@google/genai';
-
-// gemini-2.5-flash is the latest flash model (brief referred to it as "gemini-3.5-flash")
-const MODEL = 'gemini-2.5-flash';
-
-export const DEFAULT_REPLY =
-  'ขอโทษนะครับ พี่แชมป์ขอเวลาเช็คข้อมูลสักครู่นะครับ 🙏 ลองส่งข้อความมาใหม่อีกทีได้เลยครับ';
+import { buildSystemPrompt } from './prompts';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+const MODEL = 'gemini-2.5-flash-preview-05-20';
 
-function buildPrompt(faqText: string, userMessage: string): string {
-  return `<role>
-คุณคือพี่แชมป์ เจ้าของและคนดูแล Champion Tour and Transport (CTT)
-ธุรกิจรถตู้ส่วนตัวรับส่งนักท่องเที่ยว จังหวัดกระบี่ พีพี ลันตา ภูเก็ต
-</role>
+export const DEFAULT_REPLY =
+  'ขออภัยนะครับ ขอเวลาเช็คให้สักครู่ได้เลยครับ 🙏 หรือโทรหาพี่แชมป์ได้เลยครับ';
 
-<constraints>
-- ตอบโดยใช้ข้อมูลใน <faq> เท่านั้น ห้ามแต่งราคา เวลา หรือสถานที่ที่ไม่มีในข้อมูล
-- ถ้าคำถามไม่มีคำตอบใน <faq> ให้ตอบด้วยข้อความนี้เป๊ะๆ:
-  "เรื่องนี้พี่แชมป์ ยังไม่มีข้อมูลในส่วนนี้ ขอเวลาให้ทีมงานช่วยตรวจสอบให้อีกทีนะครับ 🙏 หรือโทรมาได้เลยครับ"
-- โทนเป็นกันเอง เหมือนคุยกับเพื่อน ใส่ emoji ได้ตามความเหมาะสม (ไม่เกิน 1-2 อันต่อข้อความ)
-- ความยาวคำตอบ 1-3 ประโยค กระชับ ไม่อ้อม
-</constraints>
-
-<output_format>
-ภาษาไทย ไม่ใช้ markdown ไม่ใช้ bullet point
-</output_format>
-
-<faq>
-${faqText}
-</faq>
-
-<question>
-${userMessage}
-</question>`;
-}
-
-export async function getGeminiReply(
-  faqText: string,
+export async function generateReply(
   userMessage: string,
+  faqText: string
 ): Promise<string> {
-  const prompt = buildPrompt(faqText, userMessage);
+  const startTime = Date.now();
+
+  const systemPrompt = buildSystemPrompt(faqText, DEFAULT_REPLY);
 
   const response = await ai.models.generateContent({
     model: MODEL,
-    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    contents: userMessage,
     config: {
-      temperature: 1.0,      // ห้ามแก้
-      maxOutputTokens: 1024, // ห้ามแก้
+      systemInstruction: systemPrompt,
+      temperature: 1.0,
+      maxOutputTokens: 1024, // เผื่อ thinking budget (preview model นับรวมกัน)
     },
   });
 
+  const usage = response.usageMetadata;
   const finishReason = response.candidates?.[0]?.finishReason;
-  const thoughtsTokenCount = response.usageMetadata?.thoughtsTokenCount;
-  const candidatesTokenCount = response.usageMetadata?.candidatesTokenCount;
 
+  // Token logging — ช่วย tune cap ใน Vercel logs
   console.log(
-    `[gemini] finishReason=${finishReason} | thoughts=${thoughtsTokenCount} | candidates=${candidatesTokenCount}`,
+    JSON.stringify({
+      ts: new Date().toISOString(),
+      event: 'gemini.reply',
+      latencyMs: Date.now() - startTime,
+      inputLength: userMessage.length,
+      outputLength: response.text?.length ?? 0,
+      finishReason,
+      thoughtsTokenCount: usage?.thoughtsTokenCount ?? 0,
+      candidatesTokenCount: usage?.candidatesTokenCount ?? 0,
+      totalTokenCount: usage?.totalTokenCount ?? 0,
+    })
   );
 
+  // Truncation guard: ถ้า budget หมด อย่าส่งครึ่งประโยคให้ลูกค้า
   if (finishReason === 'MAX_TOKENS') {
-    console.warn('[gemini] MAX_TOKENS hit — returning default reply');
+    console.warn(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        event: 'gemini.truncated',
+        thoughtsTokenCount: usage?.thoughtsTokenCount,
+        candidatesTokenCount: usage?.candidatesTokenCount,
+      })
+    );
     return DEFAULT_REPLY;
   }
 
-  return response.text ?? DEFAULT_REPLY;
+  const reply = response.text?.trim();
+  if (!reply) {
+    throw new Error('gemini_empty_response');
+  }
+
+  return reply;
 }
