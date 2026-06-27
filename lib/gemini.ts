@@ -17,7 +17,9 @@ export async function generateReply(
   history: ChatMessage[] = []
 ): Promise<string> {
   const startTime = Date.now();
-  const systemPrompt = buildSystemPrompt(faqText, DEFAULT_REPLY);
+  // ส่ง isFirstMessage เพื่อให้บอทไม่ทักสวัสดีซ้ำในบทสนทนาต่อเนื่อง
+  const isFirstMessage = history.length === 0;
+  const systemPrompt = buildSystemPrompt(faqText, DEFAULT_REPLY, isFirstMessage);
 
   // Build contents array: history turns + current user message
   const contents = [
@@ -47,6 +49,7 @@ export async function generateReply(
       event: 'gemini.reply',
       latencyMs: Date.now() - startTime,
       historyTurns: history.length / 2,
+      isFirstMessage,
       inputLength: userMessage.length,
       outputLength: response.text?.length ?? 0,
       finishReason,
