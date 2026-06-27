@@ -8,6 +8,7 @@ export interface BookingDetails {
   dropoff: string;
   pax: string;
   userId: string;
+  amount?: string; // ราคา เป็นตัวเลข string เช่น "600"
 }
 
 /**
@@ -34,11 +35,12 @@ export function parseBookingConfirmation(
   const pickup = get('pickup');
   const dropoff = get('dropoff');
   const pax = get('pax');
+  const amount = get('amount');
 
   // Validate required fields
   if (!date || !time || !pickup || !dropoff) return null;
 
-  return { date, time, pickup, dropoff, pax: pax || '1', userId };
+  return { date, time, pickup, dropoff, pax: pax || '1', userId, amount: amount || '0' };
 }
 
 /**
