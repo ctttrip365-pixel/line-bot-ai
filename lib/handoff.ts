@@ -1,9 +1,8 @@
-// lib/handoff.ts — Smart Handoff: detect triggers → notify admin group
+// lib/handoff.ts — Smart Handoff: detect triggers -> notify admin group
 
 import { Client } from '@line/bot-sdk';
 import { log } from './log';
 
-// Keywords ที่ต้อง route ไปให้พี่แชมป์ดูแลเอง
 const HANDOFF_TRIGGERS = [
   'คุยกับแชมป์',
   'คุยกับคน',
@@ -31,10 +30,13 @@ export function shouldHandoff(message: string): boolean {
   );
 }
 
-const lineClient = new Client({
-  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN!,
-  channelSecret: process.env.LINE_CHANNEL_SECRET!,
-});
+// Lazy init — create client only when needed, not at module load time
+function getLineClient() {
+  return new Client({
+    channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN!,
+    channelSecret: process.env.LINE_CHANNEL_SECRET!,
+  });
+}
 
 export async function notifyAdmin(
   userId: string,
@@ -47,9 +49,9 @@ export async function notifyAdmin(
   }
 
   try {
-    await lineClient.pushMessage(adminGroupId, {
+    await getLineClient().pushMessage(adminGroupId, {
       type: 'text',
-      text: `🔔 ลูกค้าต้องการคุยกับพี่แชมป์\n\nUserID: ${userId}\nข้อความ: ${userMessage}\n\nตอบได้ที่: https://manager.line.biz/chats`,
+      text: '🔔 ลูกค้าต้องการคุยกับพี่แชมป์' + '\n\n' + 'UserID: ' + userId + '\n' + 'ข้อความ: ' + userMessage + '\n\n' + 'ตอบได้ที่: https://manager.line.biz/chats',
     });
     log.info('handoff.admin_notified', { userId });
   } catch (err) {
