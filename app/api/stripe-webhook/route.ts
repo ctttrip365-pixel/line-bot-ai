@@ -8,12 +8,17 @@ import { log } from '@/lib/log';
 
 export const runtime = 'nodejs';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+// Lazy init — create clients only when needed, not at module load time
+function getStripe(): Stripe {
+  return new Stripe(process.env.STRIPE_SECRET_KEY!);
+}
 
-const lineClient = new Client({
-  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN!,
-  channelSecret: process.env.LINE_CHANNEL_SECRET!,
-});
+function getLineClient() {
+  return new Client({
+    channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN!,
+    channelSecret: process.env.LINE_CHANNEL_SECRET!,
+  });
+}
 
 export async function POST(req: Request) {
   const body = await req.text();
@@ -23,7 +28,7 @@ export async function POST(req: Request) {
 
   // 1. Verify Stripe webhook signature — ป้องกันคนปลอม request
   try {
-    event = stripe.webhooks.constructEvent(
+    event = getStripe().webhooks.constructEvent(
       body,
       sig,
       process.env.STRIPE_WEBHOOK_SECRET!
@@ -54,13 +59,13 @@ export async function POST(req: Request) {
   }
 
   const booking = {
-    date:     meta.date,
-    time:     meta.time,
-    pickup:   meta.pickup,
-    dropoff:  meta.dropoff,
-    pax:      meta.pax || '1',
-    userId:   meta.lineUserId || 'unknown',
-    amount:   meta.amount || '0',
+    date: meta.date,
+    time: meta.time,
+    pickup: meta.pickup,
+    dropoff: meta.dropoff,
+    pax: meta.pax || '1',
+    userId: meta.lineUserId || 'unknown',
+    amount: meta.amount || '0',
   };
 
   log.info('stripe.payment_received', {
@@ -76,7 +81,7 @@ export async function POST(req: Request) {
   // 5. ส่ง LINE push message แจ้งลูกค้าว่าจ่ายแล้ว + จองสมบูรณ์
   if (booking.userId && booking.userId !== 'unknown') {
     try {
-      await lineClient.pushMessage(booking.userId, {
+      await getLineClient().pushMessage(booking.userId, {
         type: 'text',
         text: [
           '✅ รับเงินเรียบร้อยแล้วครับ!',
@@ -104,7 +109,7 @@ export async function POST(req: Request) {
   const adminGroupId = process.env.ADMIN_GROUP_ID;
   if (adminGroupId) {
     try {
-      await lineClient.pushMessage(adminGroupId, {
+      await getLineClient().pushMessage(adminGroupId, {
         type: 'text',
         text: [
           '💰 มีการจองและชำระเงินใหม่!',
