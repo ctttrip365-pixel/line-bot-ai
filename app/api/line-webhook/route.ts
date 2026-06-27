@@ -12,10 +12,13 @@ import { log } from '@/lib/log';
 export const runtime = 'nodejs';
 export const maxDuration = 30;
 
-const lineClient = new Client({
-  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN!,
-  channelSecret: process.env.LINE_CHANNEL_SECRET!,
-});
+// Lazy init — ไม่สร้าง client ตอน module load (ป้องกัน build crash)
+function getLineClient() {
+  return new Client({
+    channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN!,
+    channelSecret: process.env.LINE_CHANNEL_SECRET!,
+  });
+}
 
 export async function POST(req: Request) {
   const signature = req.headers.get('x-line-signature') || '';
@@ -66,7 +69,7 @@ export async function POST(req: Request) {
 
         // 5. ตรวจว่า Gemini ยืนยันการจองหรือเปล่า
         const booking = parseBookingConfirmation(rawReply, userId);
-        let finalReply = cleanReply(rawReply); // strip [BOOKING_CONFIRMED] block เสมอ
+        let finalReply = cleanReply(rawReply);
 
         if (booking) {
           log.info('booking.confirmed', {
@@ -81,7 +84,7 @@ export async function POST(req: Request) {
 
           // 6. สร้าง Stripe Checkout link
           try {
-            const amount = Number(booking.amount) || 600; // default 600 ถ้า Gemini ไม่ระบุ
+            const amount = Number(booking.amount) || 600;
             const paymentUrl = await createCheckoutSession({
               amount,
               date: booking.date,
@@ -92,7 +95,6 @@ export async function POST(req: Request) {
               lineUserId: userId,
             });
 
-            // ต่อท้าย reply ด้วยลิงก์ชำระเงิน
             finalReply = [
               finalReply,
               '',
@@ -106,7 +108,6 @@ export async function POST(req: Request) {
             log.info('stripe.link_created', { userId, amount, paymentUrl });
           } catch (err) {
             log.error('stripe.link_failed', { err: (err as Error).message, userId });
-            // Fallback — แจ้งให้โอนตรง ถ้า Stripe ล้มเหลว
             finalReply = [
               finalReply,
               '',
@@ -129,12 +130,12 @@ export async function POST(req: Request) {
       } catch (err) {
         log.error('webhook.error', { err: (err as Error).message, userId });
         try {
-          await lineClient.replyMessage(event.replyToken!, {
+          await getLineClient().replyMessage(event.replyToken!, {
             type: 'text',
             text: DEFAULT_REPLY,
           });
         } catch {
-          /* replyToken expired · swallow */
+          /* replyToken expired */
         }
       }
     })
@@ -150,7 +151,7 @@ async function replyWithRetry(
 ): Promise<void> {
   for (let i = 0; i < attempts; i++) {
     try {
-      await lineClient.replyMessage(replyToken, { type: 'text', text });
+      await getLineClient().replyMessage(replyToken, { type: 'text', text });
       return;
     } catch (err) {
       if (i === attempts - 1) throw err;
