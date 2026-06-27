@@ -2,13 +2,18 @@
 // Bot จำบทสนทนาทุก turn ไม่ reset แม้ Vercel cold start
 
 import { Redis } from '@upstash/redis';
-import { log } from './log';
 
 function getRedis(): Redis {
-  return new Redis({
-    url: process.env.UPSTASH_REDIS_REST_URL!,
-    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-  });
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) {
+    const missing = [!url && 'UPSTASH_REDIS_REST_URL', !token && 'UPSTASH_REDIS_REST_TOKEN']
+      .filter(Boolean)
+      .join(', ');
+    console.error(JSON.stringify({ event: 'redis.missing_env', missing }));
+    throw new Error(`Redis env vars missing: ${missing}`);
+  }
+  return new Redis({ url, token });
 }
 
 const TTL_SECONDS = 48 * 60 * 60; // 48 ชั่วโมง
@@ -22,10 +27,11 @@ export interface ChatMessage {
 export async function getHistory(userId: string): Promise<ChatMessage[]> {
   try {
     const data = await getRedis().get<ChatMessage[]>(`chat:${userId}`);
+    console.log(JSON.stringify({ event: 'history.get_ok', userId, count: (data ?? []).length }));
     return data ?? [];
   } catch (err) {
-    log.warn('history.get_failed', { userId, err: (err as Error).message });
-    return []; // bot ยังทำงานได้ แค่ไม่มี context
+    console.error(JSON.stringify({ event: 'history.get_failed', userId, err: (err as Error).message }));
+    return []; // bot ยังทำงานได้ แต่ไม่มี context
   }
 }
 
@@ -38,14 +44,10 @@ export async function appendHistory(
     const history = await getHistory(userId);
     history.push({ role: 'user', text: userText });
     history.push({ role: 'model', text: modelText });
-
-    // Trim เก็บเฉพาะ MAX_MESSAGES ล่าสุด ลด payload ใน Redis
-    const trimmed = history.length > MAX_MESSAGES
-      ? history.slice(-MAX_MESSAGES)
-      : history;
-
+    const trimmed = history.length > MAX_MESSAGES ? history.slice(-MAX_MESSAGES) : history;
     await getRedis().set(`chat:${userId}`, trimmed, { ex: TTL_SECONDS });
+    console.log(JSON.stringify({ event: 'history.append_ok', userId, count: trimmed.length }));
   } catch (err) {
-    log.warn('history.append_failed', { userId, err: (err as Error).message });
+    console.error(JSON.stringify({ event: 'history.append_failed', userId, err: (err as Error).message }));
   }
 }
