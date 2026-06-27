@@ -42,7 +42,7 @@ export async function POST(req: Request) {
       try {
         if (shouldHandoff(userMessage)) {
           await notifyAdmin(userId, userMessage);
-          await replyWithRetry(event.replyToken!, 'ขอแจ้งพี่แชมป์ติดต่อกลับนะครับ 🙏', 3);
+          await replyWithRetry(event.replyToken!, 'ขอแจ้พี่แชมป์ติดต่อกลับนะครับ 🙏', 3);
           log.info('handoff.routed', { userId, latencyMs: Date.now() - startTime });
           return;
         }
@@ -76,21 +76,22 @@ export async function POST(req: Request) {
               pickup: booking.pickup, dropoff: booking.dropoff,
               pax: booking.pax, lineUserId: userId,
             });
-            finalReply = finalReply + '
-
-💳 ชำระเงินได้ที่ลิงก์นี้เลยครับ:
-' + paymentUrl + '
-
-⏱ ลิงก์หมดอายุใน 1 ชั่วโมง
-หลังชำระแล้วจะได้รับการยืนยันทาง LINE ทันทีครับ';
+            finalReply = [
+              finalReply, '',
+              '💳 ชำระเงินได้ที่ลิงก์นี้เลยครับ:',
+              paymentUrl, '',
+              '⏱ ลิงก์หมดอายุใน 1 ชั่วโมง',
+              'หลังชำระแล้วจะได้รับการยืนยันทาง LINE ทันทีครับ',
+            ].join('\n');
             log.info('stripe.link_created', { userId, amount, paymentUrl });
           } catch (err) {
             log.error('stripe.link_failed', { err: (err as Error).message, userId });
-            finalReply = finalReply + '
-
-⚠️ ระบบชำระเงินออนไลน์มีปัญหาชั่วคราวครับ
-กรุณาโอนเงินและส่ง slip มาที่ LINE นี้
-หรือโทร +66 94 269 4651 ครับ';
+            finalReply = [
+              finalReply, '',
+              '⚠️ ระบบชำระเงินออนไลน์มีปัญหาชั่วคราวครับ',
+              'กรุณาโอนเงินและส่ง slip มาที่ LINE นี้',
+              'หรือโทร +66 94 269 4651 ครับ',
+            ].join('\n');
           }
         }
 
