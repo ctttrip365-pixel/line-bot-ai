@@ -1,14 +1,16 @@
 // app/api/line-webhook/route.ts — Production webhook handler
-// Features: signature verify · parallel events · Smart Handoff · Gemini timeout · retry
+// v3: booking confirmed → สร้าง Stripe link → ส่งให้ลูกค้าจ่าย → Stripe webhook สร้าง Calendar
 
 import { Client, validateSignature, WebhookEvent } from '@line/bot-sdk';
 import { fetchFAQ } from '@/lib/sheet';
 import { generateReply, DEFAULT_REPLY } from '@/lib/gemini';
 import { shouldHandoff, notifyAdmin } from '@/lib/handoff';
+import { parseBookingConfirmation, cleanReply } from '@/lib/calendar';
+import { createCheckoutSession } from '@/lib/stripe';
 import { log } from '@/lib/log';
 
 export const runtime = 'nodejs';
-export const maxDuration = 30; // Vercel Hobby limit
+export const maxDuration = 30;
 
 const lineClient = new Client({
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN!,
@@ -19,7 +21,7 @@ export async function POST(req: Request) {
   const signature = req.headers.get('x-line-signature') || '';
   const body = await req.text();
 
-  // 1. Verify signature — กันคนปลอม request
+  // 1. Verify signature
   if (!validateSignature(body, process.env.LINE_CHANNEL_SECRET!, signature)) {
     log.warn('webhook.invalid_signature');
     return new Response('invalid signature', { status: 401 });
@@ -27,7 +29,6 @@ export async function POST(req: Request) {
 
   const events: WebhookEvent[] = JSON.parse(body).events;
 
-  // 2. Process events in parallel (LINE batches multiple events ในครั้งเดียว)
   await Promise.all(
     events.map(async (event) => {
       if (event.type !== 'message' || event.message.type !== 'text') return;
@@ -37,7 +38,7 @@ export async function POST(req: Request) {
       const startTime = Date.now();
 
       try {
-        // 3. Smart Handoff — check ก่อน Gemini เพื่อประหยัด latency
+        // 2. Smart Handoff
         if (shouldHandoff(userMessage)) {
           await notifyAdmin(userId, userMessage);
           await replyWithRetry(
@@ -45,18 +46,15 @@ export async function POST(req: Request) {
             'ขอแจ้งพี่แชมป์ติดต่อกลับนะครับ 🙏',
             3
           );
-          log.info('handoff.routed', {
-            userId,
-            latencyMs: Date.now() - startTime,
-          });
+          log.info('handoff.routed', { userId, latencyMs: Date.now() - startTime });
           return;
         }
 
-        // 4. Fetch FAQ (cached 60s)
+        // 3. Fetch FAQ
         const faqText = await fetchFAQ();
 
-        // 5. Call Gemini with 8s timeout (webhook ต้องตอบภายใน 10s)
-        const reply = await Promise.race([
+        // 4. Call Gemini with 8s timeout
+        const rawReply = await Promise.race([
           generateReply(userMessage, faqText),
           new Promise<string>((_, reject) =>
             setTimeout(() => reject(new Error('gemini_timeout')), 8000)
@@ -66,27 +64,77 @@ export async function POST(req: Request) {
           return DEFAULT_REPLY;
         });
 
-        // 6. Reply LINE with retry
-        await replyWithRetry(event.replyToken!, reply, 3);
+        // 5. ตรวจว่า Gemini ยืนยันการจองหรือเปล่า
+        const booking = parseBookingConfirmation(rawReply, userId);
+        let finalReply = cleanReply(rawReply); // strip [BOOKING_CONFIRMED] block เสมอ
+
+        if (booking) {
+          log.info('booking.confirmed', {
+            userId,
+            date: booking.date,
+            time: booking.time,
+            pickup: booking.pickup,
+            dropoff: booking.dropoff,
+            pax: booking.pax,
+            amount: booking.amount,
+          });
+
+          // 6. สร้าง Stripe Checkout link
+          try {
+            const amount = Number(booking.amount) || 600; // default 600 ถ้า Gemini ไม่ระบุ
+            const paymentUrl = await createCheckoutSession({
+              amount,
+              date: booking.date,
+              time: booking.time,
+              pickup: booking.pickup,
+              dropoff: booking.dropoff,
+              pax: booking.pax,
+              lineUserId: userId,
+            });
+
+            // ต่อท้าย reply ด้วยลิงก์ชำระเงิน
+            finalReply = [
+              finalReply,
+              '',
+              '💳 ชำระเงินได้ที่ลิงก์นี้เลยครับ:',
+              paymentUrl,
+              '',
+              '⏱ ลิงก์หมดอายุใน 1 ชั่วโมง',
+              'หลังชำระแล้วจะได้รับการยืนยันทาง LINE ทันทีครับ',
+            ].join('\n');
+
+            log.info('stripe.link_created', { userId, amount, paymentUrl });
+          } catch (err) {
+            log.error('stripe.link_failed', { err: (err as Error).message, userId });
+            // Fallback — แจ้งให้โอนตรง ถ้า Stripe ล้มเหลว
+            finalReply = [
+              finalReply,
+              '',
+              '⚠️ ระบบชำระเงินออนไลน์มีปัญหาชั่วคราวครับ',
+              'กรุณาโอนเงินและส่ง slip มาที่ LINE นี้',
+              'หรือโทร +66 94 269 4651 ครับ',
+            ].join('\n');
+          }
+        }
+
+        // 7. Reply LINE
+        await replyWithRetry(event.replyToken!, finalReply, 3);
 
         log.info('reply.sent', {
           userId,
           latencyMs: Date.now() - startTime,
-          replyLength: reply.length,
+          replyLength: finalReply.length,
+          hasBooking: !!booking,
         });
       } catch (err) {
-        log.error('webhook.error', {
-          err: (err as Error).message,
-          userId,
-        });
-        // Best-effort fallback
+        log.error('webhook.error', { err: (err as Error).message, userId });
         try {
           await lineClient.replyMessage(event.replyToken!, {
             type: 'text',
             text: DEFAULT_REPLY,
           });
         } catch {
-          /* replyToken อาจหมดอายุแล้ว · swallow */
+          /* replyToken expired · swallow */
         }
       }
     })
@@ -95,7 +143,6 @@ export async function POST(req: Request) {
   return new Response('ok', { status: 200 });
 }
 
-// Retry with exponential backoff — LINE API ตอบช้าบางครั้ง
 async function replyWithRetry(
   replyToken: string,
   text: string,
@@ -107,7 +154,7 @@ async function replyWithRetry(
       return;
     } catch (err) {
       if (i === attempts - 1) throw err;
-      await new Promise((r) => setTimeout(r, 300 * (i + 1))); // 300ms, 600ms, 900ms
+      await new Promise((r) => setTimeout(r, 300 * (i + 1)));
     }
   }
 }
