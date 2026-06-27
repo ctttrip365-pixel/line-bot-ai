@@ -1,5 +1,5 @@
 // app/api/line-webhook/route.ts — Production webhook handler
-// v3: booking confirmed -> Stripe link -> customer pays -> Stripe webhook creates Calendar
+// v4: Redis-backed 48h conversation history — bot จำบทสนทนาไม่ลืมแม้ Vercel cold start
 
 import { Client, validateSignature, WebhookEvent } from '@line/bot-sdk';
 import { fetchFAQ } from '@/lib/sheet';
@@ -7,12 +7,12 @@ import { generateReply, DEFAULT_REPLY } from '@/lib/gemini';
 import { shouldHandoff, notifyAdmin } from '@/lib/handoff';
 import { parseBookingConfirmation, cleanReply } from '@/lib/calendar';
 import { createCheckoutSession } from '@/lib/stripe';
+import { getHistory, appendHistory } from '@/lib/history';
 import { log } from '@/lib/log';
 
 export const runtime = 'nodejs';
 export const maxDuration = 30;
 
-// Lazy init — create client only when needed, not at module load time
 function getLineClient() {
   return new Client({
     channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN!,
@@ -47,10 +47,13 @@ export async function POST(req: Request) {
           return;
         }
 
-        const faqText = await fetchFAQ();
+        const [faqText, history] = await Promise.all([
+          fetchFAQ(),
+          getHistory(userId),
+        ]);
 
         const rawReply = await Promise.race([
-          generateReply(userMessage, faqText),
+          generateReply(userMessage, faqText, history),
           new Promise<string>((_, reject) =>
             setTimeout(() => reject(new Error('gemini_timeout')), 8000)
           ),
@@ -81,7 +84,7 @@ export async function POST(req: Request) {
               '💳 ชำระเงินได้ที่ลิงก์นี้เลยครับ:',
               paymentUrl, '',
               '⏱ ลิงก์หมดอายุใน 1 ชั่วโมง',
-              'หลังชำระแล้วจะได้รับการยืนยันทาง LINE ทันทีครับ',
+              'หลังชำระแล้วจะได้รับการยืนยันทาง LINE ทันทีเลยครับ',
             ].join('\n');
             log.info('stripe.link_created', { userId, amount, paymentUrl });
           } catch (err) {
@@ -96,7 +99,17 @@ export async function POST(req: Request) {
         }
 
         await replyWithRetry(event.replyToken!, finalReply, 3);
-        log.info('reply.sent', { userId, latencyMs: Date.now() - startTime, replyLength: finalReply.length, hasBooking: !!booking });
+
+        // บันทึก history หลังตอบลูกค้าเรียบร้อย (non-blocking)
+        appendHistory(userId, userMessage, finalReply).catch(() => {});
+
+        log.info('reply.sent', {
+          userId,
+          latencyMs: Date.now() - startTime,
+          replyLength: finalReply.length,
+          hasBooking: !!booking,
+          historyTurns: history.length / 2,
+        });
       } catch (err) {
         log.error('webhook.error', { err: (err as Error).message, userId });
         try {
