@@ -1,9 +1,9 @@
-// lib/gemini.ts — Gemini wrapper (timeout · truncation guard · token logging)
-// ⚠️ gemini-2.5-flash: maxOutputTokens นับ output อย่างเดียว · 200 พอ
-// ⚠️ gemini-2.5-flash-preview / 3.x: นับ thinking + output รวม · ต้องตั้ง 1024+
+// lib/gemini.ts — Gemini wrapper with conversation history support
+// history ถูกโลดจาก Redis และส่งมาที่นี่ เพื่อให้ Gemini จำบทสนทนาได้
 
 import { GoogleGenAI } from '@google/genai';
 import { buildSystemPrompt } from './prompts';
+import type { ChatMessage } from './history';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 const MODEL = 'gemini-2.5-flash';
@@ -13,31 +13,40 @@ export const DEFAULT_REPLY =
 
 export async function generateReply(
   userMessage: string,
-  faqText: string
+  faqText: string,
+  history: ChatMessage[] = []
 ): Promise<string> {
   const startTime = Date.now();
-
   const systemPrompt = buildSystemPrompt(faqText, DEFAULT_REPLY);
+
+  // Build contents array: history turns + current user message
+  const contents = [
+    ...history.map((msg) => ({
+      role: msg.role as 'user' | 'model',
+      parts: [{ text: msg.text }],
+    })),
+    { role: 'user' as const, parts: [{ text: userMessage }] },
+  ];
 
   const response = await ai.models.generateContent({
     model: MODEL,
-    contents: userMessage,
+    contents,
     config: {
       systemInstruction: systemPrompt,
       temperature: 1.0,
-      maxOutputTokens: 1024, // เผื่อ thinking budget (preview model นับรวมกัน)
+      maxOutputTokens: 1024,
     },
   });
 
   const usage = response.usageMetadata;
   const finishReason = response.candidates?.[0]?.finishReason;
 
-  // Token logging — ช่วย tune cap ใน Vercel logs
   console.log(
     JSON.stringify({
       ts: new Date().toISOString(),
       event: 'gemini.reply',
       latencyMs: Date.now() - startTime,
+      historyTurns: history.length / 2,
       inputLength: userMessage.length,
       outputLength: response.text?.length ?? 0,
       finishReason,
@@ -47,7 +56,6 @@ export async function generateReply(
     })
   );
 
-  // Truncation guard: ถ้า budget หมด อย่าส่งครึ่งประโยคให้ลูกค้า
   if (finishReason === 'MAX_TOKENS') {
     console.warn(
       JSON.stringify({
@@ -61,9 +69,7 @@ export async function generateReply(
   }
 
   const reply = response.text?.trim();
-  if (!reply) {
-    throw new Error('gemini_empty_response');
-  }
+  if (!reply) throw new Error('gemini_empty_response');
 
   return reply;
 }
