@@ -1,5 +1,5 @@
 // lib/sheet.ts — FAQ cache (60-sec TTL + stale fallback)
-// CSV format: question, answer, category (column A, B, C)
+// CSV format: category, question, answer (column A, B, C)
 
 let cache: { text: string; expiresAt: number } | null = null;
 const CACHE_TTL_MS = 60_000; // 60 วินาที
@@ -34,12 +34,12 @@ export async function fetchFAQ(): Promise<string> {
 }
 
 function csvToFaqText(csv: string): string {
-  // CSV columns: question (A), answer (B), category (C)
+  // CSV columns: category (A), question (B), answer (C)
   const lines = csv.split('\n').slice(1); // skip header row
   return lines
     .filter((line) => line.trim())
     .map((line) => {
-      const [question, answer, category] = parseCSVLine(line);
+      const [category, question, answer] = parseCSVLine(line);
       if (!question || !answer) return null;
       return `[${category || 'ทั่วไป'}] ${question}\n→ ${answer}`;
     })
