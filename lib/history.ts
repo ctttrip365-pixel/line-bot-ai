@@ -1,5 +1,6 @@
 // lib/history.ts — Persistent chat history via Upstash Redis (48h TTL)
 // Bot จำบทสนทนาทุก turn ไม่ reset แม้ Vercel cold start
+// (force fresh deploy to pick up UPSTASH_REDIS_REST_URL/TOKEN env vars)
 
 import { Redis } from '@upstash/redis';
 
