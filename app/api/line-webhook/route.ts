@@ -1,6 +1,7 @@
 // app/api/line-webhook/route.ts — Production webhook handler
 // v4: Redis-backed 48h conversation history — bot จำบทสนทนาไม่ลืมแม้ Vercel cold start
 
+import { after } from 'next/server';
 import { Client, validateSignature, WebhookEvent } from '@line/bot-sdk';
 import { fetchFAQ } from '@/lib/sheet';
 import { generateReply, DEFAULT_REPLY } from '@/lib/gemini';
@@ -100,8 +101,9 @@ export async function POST(req: Request) {
 
         await replyWithRetry(event.replyToken!, finalReply, 3);
 
-        // บันทึก history หลังตอบลูกค้าเรียบร้อย (non-blocking)
-        appendHistory(userId, userMessage, finalReply).catch(() => {});
+        // บันทึก history หลังตอบลูกค้าเรียบร้อย — ใช้ after() เพื่อให้ทำงานจนจบ
+        // ก่อน Vercel จะ freeze function (fire-and-forget เฉยๆ จะโดนตัดก่อนเขียน Redis เสร็จ)
+        after(() => appendHistory(userId, userMessage, finalReply).catch(() => {}));
 
         log.info('reply.sent', {
           userId,
