@@ -9,6 +9,8 @@ import { shouldHandoff, notifyAdmin } from '@/lib/handoff';
 import { parseBookingConfirmation, cleanReply } from '@/lib/calendar';
 import { createCheckoutSession } from '@/lib/stripe';
 import { getHistory, appendHistory } from '@/lib/history';
+import { findDriverByLineId } from '@/lib/drivers';
+import { handleDriverMessage, handleDriverPostback } from '@/lib/driver-flow';
 import { log } from '@/lib/log';
 
 export const runtime = 'nodejs';
@@ -34,10 +36,28 @@ export async function POST(req: Request) {
 
   await Promise.all(
     events.map(async (event) => {
+      const userId = event.source.userId || 'unknown';
+
+      // --- Driver routing: checked FIRST, before anything Gemini/customer-related.
+      // Known drivers (Sheet "Drivers", cached) never touch the sales AI at all —
+      // this is a deliberate structural separation, not just a keyword filter, so
+      // there's no risk of driver traffic ever mixing with customer chat handling.
+      if (event.type === 'postback') {
+        const driver = await findDriverByLineId(userId);
+        if (driver) await handleDriverPostback(driver, event.postback.data, event.replyToken);
+        return; // postbacks from non-drivers are ignored entirely (none are sent to customers today)
+      }
+
       if (event.type !== 'message' || event.message.type !== 'text') return;
 
       const userMessage = event.message.text;
-      const userId = event.source.userId || 'unknown';
+
+      const driver = await findDriverByLineId(userId);
+      if (driver) {
+        await handleDriverMessage(driver, userMessage, event.replyToken!);
+        return;
+      }
+
       const startTime = Date.now();
 
       try {
