@@ -85,3 +85,11 @@ export function sheetUpdateRow(
 ): Promise<GasResponse<void>> {
   return callGas('sheet_update', { tab, matchColumn, matchValue, patch });
 }
+
+/**
+ * เขียนทับทั้งแท็บด้วยตาราง 2 มิติดิบๆ (สร้างแท็บใหม่ถ้ายังไม่มี) — ใช้สำหรับ
+ * แท็บสรุปที่คนอ่าน เช่น ตารางแถว=คนขับ/คอลัมน์=วันที่ ไม่ใช่ข้อมูลที่ระบบอ่านกลับ
+ */
+export function writeGrid(tab: string, values: (string | number)[][]): Promise<GasResponse<void>> {
+  return callGas('sheet_write_grid', { tab, values });
+}

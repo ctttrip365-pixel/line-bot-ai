@@ -22,6 +22,16 @@ export async function getAvailability(driverId: string, month: string): Promise<
   return row?.available_dates ? row.available_dates.split(',').map((d) => d.trim()) : [];
 }
 
+/** ทุกคนที่ส่งวันว่างของเดือนนั้นมาแล้ว — ใช้ทำตารางสรุปแบบกริด (ดู lib/driver-grid.ts) */
+export async function getAllAvailabilityForMonth(month: string): Promise<AvailabilityRow[]> {
+  const res = await sheetRead<AvailabilityRow[]>('Availability_Monthly');
+  if (!res.ok || !res.data) {
+    log.error('availability.read_failed', { error: res.error });
+    return [];
+  }
+  return res.data.filter((r) => r.month === month);
+}
+
 export async function submitAvailability(
   driverId: string,
   month: string,
