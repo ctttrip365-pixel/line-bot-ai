@@ -54,17 +54,20 @@ export async function submitAvailability(
   log.info('availability.submitted', { driverId, month, dateCount: dates.length });
 }
 
+const AIRASIA_CALENDAR_ID = 'sutanas@airasia.com';
+
 /**
- * แชมป์เองไม่กรอกวันว่าง — วัน OFF ในปฏิทินกะ AirAsia (สร้างโดย skill `airasia-shift`,
- * all-day event ชื่อ "OFF" ที่ description มีคำว่า "Suttana") = วันว่างขับของแชมป์
+ * แชมป์เองไม่กรอกวันว่าง — วัน OFF ในปฏิทินกะ AirAsia ของแชมป์เอง (`sutanas@airasia.com`,
+ * sync อัตโนมัติจากระบบตารางเวรสายการบิน — event all-day ชื่อ "OFF" ไม่มี description)
+ * = วันว่างขับของแชมป์ ต้องแชร์ปฏิทินนี้ให้ ctt.trip365@gmail.com เห็นก่อน (ทำแล้ว 2026-09-22)
  */
 export async function getChampAvailability(fromIso: string, toIso: string): Promise<string[]> {
-  const res = await listCalendarEvents(fromIso, toIso);
+  const res = await listCalendarEvents(fromIso, toIso, AIRASIA_CALENDAR_ID);
   if (!res.ok || !res.data) {
     log.error('champ_availability.read_failed', { error: res.error });
     return [];
   }
   return res.data
-    .filter((e) => e.summary === 'OFF' && e.description?.includes('Suttana'))
+    .filter((e) => e.summary === 'OFF')
     .map((e) => e.start.slice(0, 10)); // YYYY-MM-DD
 }

@@ -57,9 +57,9 @@ export interface CalendarEventSummary {
   start: string; // ISO
 }
 
-/** List events in a date range on the CTT booking calendar. */
-export function listCalendarEvents(fromIso: string, toIso: string): Promise<GasResponse<CalendarEventSummary[]>> {
-  return callGas('calendar_list', { from: fromIso, to: toIso });
+/** List events in a date range. Defaults to the CTT booking calendar — pass calendarId to read a different one (e.g. แชมป์'s AirAsia calendar). */
+export function listCalendarEvents(fromIso: string, toIso: string, calendarId?: string): Promise<GasResponse<CalendarEventSummary[]>> {
+  return callGas('calendar_list', { from: fromIso, to: toIso, calendarId });
 }
 
 /** Append/replace the "Driver: ..." line in an event's description. */
