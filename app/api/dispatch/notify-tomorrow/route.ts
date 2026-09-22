@@ -1,5 +1,5 @@
 // app/api/dispatch/notify-tomorrow/route.ts — Vercel Cron target, runs daily at
-// 18:00 Asia/Bangkok (see vercel.json). Pure "read confirmed data, send templated
+// 22:00 Asia/Bangkok (see vercel.json). Pure "read confirmed data, send templated
 // LINE message" — zero judgment, so it must run unattended every single day
 // regardless of whether แชมป์'s Mac / a Claude Code session is on. Do NOT move this
 // to a Claude Code scheduled task or desktop automation — see the design plan's

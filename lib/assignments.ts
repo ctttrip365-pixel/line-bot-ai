@@ -66,7 +66,9 @@ export async function confirmAssignment(
     status: 'confirmed',
     confirmed_at: new Date().toISOString(),
   });
-  await updateCalendarEventDriver(bookingEventId, `Driver: ${driverDisplayName} (${driverId})`);
+  // ไม่ต้องใส่ prefix "Driver: " เอง — Apps Script (calendarUpdateDriver_) เติมให้แล้ว
+  // ใส่ซ้ำเองมาก่อนหน้านี้ทำให้ description ออกมาเป็น "Driver: Driver: Ball (ball)"
+  await updateCalendarEventDriver(bookingEventId, `${driverDisplayName} (${driverId})`);
   log.info('assignment.confirmed', { bookingEventId, driverId });
 }
 

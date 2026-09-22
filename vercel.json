@@ -6,7 +6,7 @@
   "crons": [
     {
       "path": "/api/dispatch/notify-tomorrow",
-      "schedule": "0 11 * * *"
+      "schedule": "0 15 * * *"
     },
     {
       "path": "/api/dispatch/refresh-day-status",
