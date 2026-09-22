@@ -19,7 +19,10 @@ export interface Driver {
   notes: string;
 }
 
-const CACHE_TTL_MS = 60_000; // same 60s convention as lib/sheet.ts's FAQ cache
+// Driver roster changes rarely (Champ adds a row by hand occasionally) — cache
+// generously so most messages hit the fast path instead of paying Apps Script's
+// ~10-15s cold-start latency on every single incoming LINE message.
+const CACHE_TTL_MS = 5 * 60_000;
 let cache: { at: number; drivers: Driver[] } | null = null;
 
 export async function listDrivers(forceRefresh = false): Promise<Driver[]> {

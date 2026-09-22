@@ -26,7 +26,12 @@ async function callGas<T = unknown>(action: string, payload: Record<string, unkn
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action, ...payload }),
-      signal: AbortSignal.timeout(8000),
+      // Apps Script web apps have real cold-start latency (observed 10-15s for
+      // a plain Sheet read) — 8s was too aggressive and made every driver-check
+      // time out, silently falling everyone through to the Gemini/customer path.
+      // 20s leaves headroom above the worst case we've seen while still leaving
+      // the Gemini call room inside the 30s function budget on a cache miss.
+      signal: AbortSignal.timeout(20000),
     });
 
     if (!res.ok) {
