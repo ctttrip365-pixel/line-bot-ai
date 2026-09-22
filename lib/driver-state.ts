@@ -14,12 +14,11 @@ function getRedis(): Redis {
 
 const STATE_TTL_SECONDS = 24 * 60 * 60; // ให้เวลากรอกทั้งเดือนพอสมควรแต่ไม่ค้างถาวรถ้าทำครึ่งๆ กลาง
 
-export async function toggleAvailabilityDate(
-  driverId: string,
-  month: string,
-  date: string
-): Promise<string[]> {
-  const key = `avail_sel:${driverId}:${month}`;
+// เก็บ selection ต่อคนขับตัวเดียว (ไม่แยกตามเดือน) เพราะตัวปฏิทินตอนนี้เป็น rolling
+// window "วันนี้ → สิ้นเดือนหน้า" ที่คร่อม 2 เดือนปฏิทินได้ในเซสชันเดียว — ดู lib/date-range.ts
+
+export async function toggleAvailabilityDate(driverId: string, date: string): Promise<string[]> {
+  const key = `avail_sel:${driverId}`;
   try {
     const current = (await getRedis().get<string[]>(key)) ?? [];
     const next = current.includes(date) ? current.filter((d) => d !== date) : [...current, date];
@@ -31,17 +30,17 @@ export async function toggleAvailabilityDate(
   }
 }
 
-export async function getSelectedDates(driverId: string, month: string): Promise<string[]> {
+export async function getSelectedDates(driverId: string): Promise<string[]> {
   try {
-    return (await getRedis().get<string[]>(`avail_sel:${driverId}:${month}`)) ?? [];
+    return (await getRedis().get<string[]>(`avail_sel:${driverId}`)) ?? [];
   } catch {
     return [];
   }
 }
 
-export async function clearSelectedDates(driverId: string, month: string): Promise<void> {
+export async function clearSelectedDates(driverId: string): Promise<void> {
   try {
-    await getRedis().del(`avail_sel:${driverId}:${month}`);
+    await getRedis().del(`avail_sel:${driverId}`);
   } catch (err) {
     log.error('driver_state.clear_failed', { err: (err as Error).message });
   }

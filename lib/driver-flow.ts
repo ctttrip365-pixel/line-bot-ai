@@ -20,7 +20,8 @@ import {
 import { submitAvailability } from './availability';
 import { createLeaveRequest } from './leave';
 import { sendTelegramMessage } from './telegram';
-import { getDayStatusMap } from './day-status';
+import { DayStatus, getDayStatusMap } from './day-status';
+import { rollingDateRange, monthsInRollingRange } from './date-range';
 import { log } from './log';
 
 function getLineClient() {
@@ -30,10 +31,10 @@ function getLineClient() {
   });
 }
 
-function nextMonthString(): string {
-  const d = new Date();
-  d.setMonth(d.getMonth() + 1, 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+/** รวม day-status ของทุกเดือนที่ rolling window แตะ (ปกติเดือนนี้+เดือนหน้า) เป็น map เดียว */
+async function combinedDayStatus(): Promise<Record<string, DayStatus>> {
+  const maps = await Promise.all(monthsInRollingRange().map((m) => getDayStatusMap(m)));
+  return Object.assign({}, ...maps);
 }
 
 async function reply(replyToken: string, messages: Parameters<Client['replyMessage']>[1]) {
@@ -76,25 +77,22 @@ export async function handleDriverMessage(
   }
 
   if (text.includes('วันว่าง')) {
-    const month = nextMonthString();
-    const [selected, dayStatus] = await Promise.all([
-      getSelectedDates(driver.driver_id, month),
-      getDayStatusMap(month),
-    ]);
-    await reply(replyToken, buildAvailabilityCarousel(month, selected, dayStatus));
+    const dates = rollingDateRange();
+    const [selected, dayStatus] = await Promise.all([getSelectedDates(driver.driver_id), combinedDayStatus()]);
+    await reply(replyToken, buildAvailabilityCarousel(dates, selected, dayStatus));
     return;
   }
 
   if (text.includes('ลา') || text.includes('เปลี่ยนวัน')) {
-    const month = nextMonthString();
-    const dayStatus = await getDayStatusMap(month);
-    await reply(replyToken, buildLeaveDatePicker(month, dayStatus));
+    const dates = rollingDateRange();
+    const dayStatus = await combinedDayStatus();
+    await reply(replyToken, buildLeaveDatePicker(dates, dayStatus));
     return;
   }
 
   await reply(replyToken, {
     type: 'text',
-    text: 'พิมพ์ "วันว่าง" เพื่อส่งวันว่างขับเดือนหน้า หรือ "ขอลา" เพื่อขอลา/เปลี่ยนวันครับ',
+    text: 'พิมพ์ "วันว่าง" เพื่อส่งวันว่างขับ (ตั้งแต่วันนี้ถึงสิ้นเดือนหน้า) หรือ "ขอลา" เพื่อขอลา/เปลี่ยนวันครับ',
   });
 }
 
@@ -106,23 +104,30 @@ export async function handleDriverPostback(
   const [action, ...rest] = data.split(':');
 
   if (action === 'avail' && rest[0] === 'pick') {
-    const [, month, date] = rest;
-    const selected = await toggleAvailabilityDate(driver.driver_id, month, date);
+    const [, date] = rest;
+    const selected = await toggleAvailabilityDate(driver.driver_id, date);
     await reply(replyToken, {
       type: 'text',
-      text: `${selected.includes(date) ? '✅ เลือก' : '➖ ยกเลิก'}วันที่ ${date} (ตอนนี้เลือกไว้ ${selected.length} วัน — เลือกต่อได้เลย แล้วกด "ส่งวันว่างเดือนนี้" ที่ bubble สุดท้าย)`,
+      text: `${selected.includes(date) ? '✅ เลือก' : '➖ ยกเลิก'}วันที่ ${date} (ตอนนี้เลือกไว้ ${selected.length} วัน — เลือกต่อได้เลย แล้วกด "ส่งวันว่าง" ที่ bubble สุดท้าย)`,
     });
     return;
   }
 
   if (action === 'avail' && rest[0] === 'submit') {
-    const [, month] = rest;
-    const selected = await getSelectedDates(driver.driver_id, month);
-    await submitAvailability(driver.driver_id, month, selected);
-    await clearSelectedDates(driver.driver_id, month);
+    const selected = await getSelectedDates(driver.driver_id);
+    // rolling window คร่อมได้หลายเดือนปฏิทิน — แยกวันตามเดือนก่อนเขียนลง Availability_Monthly (1 แถว/เดือน)
+    const byMonth = new Map<string, string[]>();
+    for (const date of selected) {
+      const month = date.slice(0, 7);
+      byMonth.set(month, [...(byMonth.get(month) ?? []), date]);
+    }
+    for (const [month, datesInMonth] of Array.from(byMonth.entries())) {
+      await submitAvailability(driver.driver_id, month, datesInMonth);
+    }
+    await clearSelectedDates(driver.driver_id);
     await reply(replyToken, {
       type: 'text',
-      text: `ส่งวันว่างเดือน ${month} แล้วครับ (${selected.length} วัน) ขอบคุณครับ 🙏`,
+      text: `ส่งวันว่างแล้วครับ (${selected.length} วัน) ขอบคุณครับ 🙏`,
     });
     return;
   }
