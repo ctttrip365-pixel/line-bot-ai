@@ -20,6 +20,7 @@ import {
 import { submitAvailability } from './availability';
 import { createLeaveRequest } from './leave';
 import { sendTelegramMessage } from './telegram';
+import { getDayStatusMap } from './day-status';
 import { log } from './log';
 
 function getLineClient() {
@@ -76,14 +77,18 @@ export async function handleDriverMessage(
 
   if (text.includes('วันว่าง')) {
     const month = nextMonthString();
-    const selected = await getSelectedDates(driver.driver_id, month);
-    await reply(replyToken, buildAvailabilityCarousel(month, selected));
+    const [selected, dayStatus] = await Promise.all([
+      getSelectedDates(driver.driver_id, month),
+      getDayStatusMap(month),
+    ]);
+    await reply(replyToken, buildAvailabilityCarousel(month, selected, dayStatus));
     return;
   }
 
   if (text.includes('ลา') || text.includes('เปลี่ยนวัน')) {
     const month = nextMonthString();
-    await reply(replyToken, buildLeaveDatePicker(month));
+    const dayStatus = await getDayStatusMap(month);
+    await reply(replyToken, buildLeaveDatePicker(month, dayStatus));
     return;
   }
 

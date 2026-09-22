@@ -4,6 +4,7 @@
 // documented elsewhere in this repo doesn't apply here at all.
 
 import { FlexBubble, FlexMessage, Message } from '@line/bot-sdk';
+import { DayStatus } from './day-status';
 
 const THAI_WEEKDAYS = ['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'];
 const THAI_MONTHS = [
@@ -16,11 +17,12 @@ function thaiMonthLabel(month: string): string {
   return `${THAI_MONTHS[m - 1]} ${y}`;
 }
 
-function dayLabel(date: string): string {
-  // "1 พฤ" — วันที่ + วันในสัปดาห์แบบย่อ อ่านง่ายกว่าเลขเปล่าๆ
+function dayLabel(date: string, status?: DayStatus): string {
+  // "1 พฤ" หรือ "1 พฤ · ไม่มีงาน" ถ้ามีข้อมูลสถานะ booking ของวันนั้น
   const [y, m, d] = date.split('-').map(Number);
   const weekday = THAI_WEEKDAYS[new Date(y, m - 1, d).getDay()];
-  return `${d} ${weekday}`;
+  const base = `${d} ${weekday}`;
+  return status ? `${base} · ${status}` : base;
 }
 
 function daysInMonth(month: string): string[] {
@@ -44,7 +46,11 @@ function chunk<T>(arr: T[], size: number): T[][] {
  * postback data: "avail:pick:{month}:{date}" ต่อวันที่ถูกกด, ปุ่มสุดท้ายรวม "avail:submit:{month}"
  * เลือกได้หลายวัน (bot toggle สถานะไว้ใน Redis จนกว่าจะกด submit — ดู app/api/line-webhook)
  */
-export function buildAvailabilityCarousel(month: string, selectedDates: string[]): FlexMessage {
+export function buildAvailabilityCarousel(
+  month: string,
+  selectedDates: string[],
+  dayStatus?: Record<string, DayStatus>
+): FlexMessage {
   const weeks = chunk(daysInMonth(month), 7);
   const selected = new Set(selectedDates);
 
@@ -62,7 +68,7 @@ export function buildAvailabilityCarousel(month: string, selectedDates: string[]
           height: 'sm' as const,
           action: {
             type: 'postback' as const,
-            label: dayLabel(date), // "1 พฤ" — วันที่ + วันในสัปดาห์
+            label: dayLabel(date, dayStatus?.[date]),
             data: `avail:pick:${month}:${date}`,
             displayText: `เลือกวันที่ ${dayLabel(date)} (${date})`,
           },
@@ -102,7 +108,7 @@ export function buildAvailabilityCarousel(month: string, selectedDates: string[]
   };
 }
 
-export function buildLeaveDatePicker(month: string): FlexMessage {
+export function buildLeaveDatePicker(month: string, dayStatus?: Record<string, DayStatus>): FlexMessage {
   // ใช้โครงเดียวกับ availability แต่ postback prefix ต่างกัน (leave:pick / leave:submit)
   const weeks = chunk(daysInMonth(month), 7);
   const bubbles: FlexBubble[] = weeks.map((week, i) => ({
@@ -119,7 +125,7 @@ export function buildLeaveDatePicker(month: string): FlexMessage {
           height: 'sm' as const,
           action: {
             type: 'postback' as const,
-            label: dayLabel(date),
+            label: dayLabel(date, dayStatus?.[date]),
             data: `leave:pick:${date}`,
             displayText: `ขอลาวันที่ ${dayLabel(date)} (${date})`,
           },
