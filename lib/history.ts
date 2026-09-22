@@ -1,14 +1,17 @@
-// lib/history.ts — Persistent chat history via Upstash Redis (48h TTL)
+// lib/history.ts — Persistent chat history via Redis (48h TTL)
 // Bot จำบทสนทนาทุก turn ไม่ reset แม้ Vercel cold start
-// (force fresh deploy to pick up UPSTASH_REDIS_REST_URL/TOKEN env vars)
+//
+// 2026-09-22: ฐานข้อมูล Upstash เดิม (UPSTASH_REDIS_REST_URL/TOKEN) ถูกลบไปแล้ว
+// (DNS หาไม่เจอ) — สร้างใหม่ผ่าน Vercel Storage integration ซึ่งตั้งชื่อ env var
+// เป็น KV_REST_API_URL/TOKEN แทน รองรับทั้งคู่เผื่อมีคนตั้งชื่อแบบเดิมอีกในอนาคต
 
 import { Redis } from '@upstash/redis';
 
 function getRedis(): Redis {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
   if (!url || !token) {
-    const missing = [!url && 'UPSTASH_REDIS_REST_URL', !token && 'UPSTASH_REDIS_REST_TOKEN']
+    const missing = [!url && 'KV_REST_API_URL/UPSTASH_REDIS_REST_URL', !token && 'KV_REST_API_TOKEN/UPSTASH_REDIS_REST_TOKEN']
       .filter(Boolean)
       .join(', ');
     console.error(JSON.stringify({ event: 'redis.missing_env', missing }));

@@ -5,6 +5,24 @@
 
 import { FlexBubble, FlexMessage, Message } from '@line/bot-sdk';
 
+const THAI_WEEKDAYS = ['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'];
+const THAI_MONTHS = [
+  'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.',
+  'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.',
+];
+
+function thaiMonthLabel(month: string): string {
+  const [y, m] = month.split('-').map(Number);
+  return `${THAI_MONTHS[m - 1]} ${y}`;
+}
+
+function dayLabel(date: string): string {
+  // "1 พฤ" — วันที่ + วันในสัปดาห์แบบย่อ อ่านง่ายกว่าเลขเปล่าๆ
+  const [y, m, d] = date.split('-').map(Number);
+  const weekday = THAI_WEEKDAYS[new Date(y, m - 1, d).getDay()];
+  return `${d} ${weekday}`;
+}
+
 function daysInMonth(month: string): string[] {
   // month: "YYYY-MM"
   const [y, m] = month.split('-').map(Number);
@@ -37,16 +55,16 @@ export function buildAvailabilityCarousel(month: string, selectedDates: string[]
       type: 'box',
       layout: 'vertical',
       contents: [
-        { type: 'text', text: `สัปดาห์ที่ ${i + 1}`, weight: 'bold', size: 'sm' },
+        { type: 'text', text: `${thaiMonthLabel(month)} · สัปดาห์ ${i + 1}`, weight: 'bold', size: 'sm', wrap: true },
         ...week.map((date) => ({
           type: 'button' as const,
           style: (selected.has(date) ? 'primary' : 'secondary') as 'primary' | 'secondary',
           height: 'sm' as const,
           action: {
             type: 'postback' as const,
-            label: date.slice(-2), // แค่วันที่ (dd)
+            label: dayLabel(date), // "1 พฤ" — วันที่ + วันในสัปดาห์
             data: `avail:pick:${month}:${date}`,
-            displayText: `เลือกวันที่ ${date}`,
+            displayText: `เลือกวันที่ ${dayLabel(date)} (${date})`,
           },
         })),
       ],
@@ -94,16 +112,16 @@ export function buildLeaveDatePicker(month: string): FlexMessage {
       type: 'box',
       layout: 'vertical',
       contents: [
-        { type: 'text', text: `สัปดาห์ที่ ${i + 1}`, weight: 'bold', size: 'sm' },
+        { type: 'text', text: `${thaiMonthLabel(month)} · สัปดาห์ ${i + 1}`, weight: 'bold', size: 'sm', wrap: true },
         ...week.map((date) => ({
           type: 'button' as const,
           style: 'secondary' as const,
           height: 'sm' as const,
           action: {
             type: 'postback' as const,
-            label: date.slice(-2),
+            label: dayLabel(date),
             data: `leave:pick:${date}`,
-            displayText: `ขอลาวันที่ ${date}`,
+            displayText: `ขอลาวันที่ ${dayLabel(date)} (${date})`,
           },
         })),
       ],
