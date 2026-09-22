@@ -77,7 +77,8 @@ export function buildAvailabilityCarousel(
     },
   }));
 
-  // bubble สุดท้าย: ปุ่มส่ง
+  // bubble สุดท้าย: ปุ่มส่ง — ไม่ใส่ตัวเลขจำนวนวันที่เลือกไว้ตรงนี้ เพราะการ์ดที่ส่งไปแล้ว
+  // แก้ไขให้อัปเดตสดไม่ได้ (ข้อจำกัดของ LINE) — จำนวนจริงจะอยู่ในข้อความตอบกลับทุกครั้งที่กดเลือกวันแทน
   bubbles.push({
     type: 'bubble',
     size: 'micro',
@@ -85,7 +86,7 @@ export function buildAvailabilityCarousel(
       type: 'box',
       layout: 'vertical',
       contents: [
-        { type: 'text', text: `เลือกแล้ว ${selectedDates.length} วัน`, size: 'sm', wrap: true },
+        { type: 'text', text: 'เลือกวันครบแล้วกดส่งได้เลย', size: 'sm', wrap: true },
         {
           type: 'button',
           style: 'primary',
