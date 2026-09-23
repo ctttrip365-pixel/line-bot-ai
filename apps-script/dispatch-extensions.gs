@@ -102,14 +102,20 @@ function getSheet_(tabName) {
 }
 
 /**
- * Google Sheets เก็บช่องที่ดูเหมือน date/time ("2026-09-24", "11:00") เป็น native Date object
- * จริงๆ เบื้องหลัง — String(dateObj) ให้ผลแบบ "Sat Dec 30 1899 11:00:00 GMT+..." (Dec 30 1899 คือ
- * epoch ภายในของ Sheets สำหรับช่อง "เวลาอย่างเดียว") ต้องเช็ค Date แล้ว format เอง ไม่งั้นทุกแท็บ
+ * Google Sheets เก็บช่องที่ดูเหมือน date/time/month ("2026-09-24", "11:00", "2026-10") เป็น native
+ * Date object จริงๆ เบื้องหลัง — String(dateObj) ให้ผลแบบ "Sat Dec 30 1899 11:00:00 GMT+..." (Dec 30
+ * 1899 คือ epoch ภายในของ Sheets สำหรับช่อง "เวลาอย่างเดียว") ต้องเช็ค Date แล้ว format เอง ไม่งั้นทุกแท็บ
  * ที่มีคอลัมน์วันที่/เวลาจะอ่านออกมาเพี้ยน (เจอจริงกับ job_date/job_start_time ใน Assignments_Log)
+ *
+ * คอลัมน์ "month" (Availability_Monthly) เป็นเคสพิเศษ — เก็บแค่ "YYYY-MM" ไม่มีวัน Sheets ตีความเป็น
+ * วันที่ 1 ของเดือนนั้นแล้วเก็บเป็น Date เหมือนกัน ถ้าใช้ฟอร์แมต "yyyy-MM-dd" เหมือนคอลัมน์อื่นจะได้
+ * "2026-10-01" ไม่ใช่ "2026-10" ทำให้โค้ดฝั่ง Next.js เทียบ month ไม่ตรงกันเลย (เจอจริง — คนขับทุกคน
+ * ที่ไม่ใช่แชมป์ อ่านวันว่างไม่เจอเลย เพราะแชมป์ใช้ปฏิทิน AirAsia แยก ไม่ผ่านคอลัมน์นี้)
  */
-function formatCellValue_(v) {
+function formatCellValue_(v, headerName) {
   if (v === undefined || v === null || v === '') return '';
   if (Object.prototype.toString.call(v) !== '[object Date]') return String(v);
+  if (headerName === 'month') return Utilities.formatDate(v, 'Asia/Bangkok', 'yyyy-MM');
   const isTimeOnly = v.getFullYear() === 1899 && v.getMonth() === 11 && v.getDate() === 30;
   return Utilities.formatDate(v, 'Asia/Bangkok', isTimeOnly ? 'HH:mm' : 'yyyy-MM-dd');
 }
@@ -121,7 +127,7 @@ function sheetRead(tabName) {
     const headers = values[0];
     const rows = values.slice(1).map((row) => {
       const obj = {};
-      headers.forEach((h, i) => (obj[h] = formatCellValue_(row[i])));
+      headers.forEach((h, i) => (obj[h] = formatCellValue_(row[i], h)));
       return obj;
     });
     return { ok: true, data: rows };
