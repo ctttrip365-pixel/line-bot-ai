@@ -9,7 +9,7 @@
 
 import { Client } from '@line/bot-sdk';
 import { Driver } from './drivers';
-import { buildAvailabilityCarousel, buildLeaveDatePicker } from './flex-driver';
+import { buildAvailabilityCarousel, buildLeaveDatePicker, buildUpcomingJobsText } from './flex-driver';
 import {
   toggleAvailabilityDate,
   getSelectedDates,
@@ -22,6 +22,9 @@ import { createLeaveRequest } from './leave';
 import { sendTelegramMessage } from './telegram';
 import { DayStatus, getDayStatusMap } from './day-status';
 import { JobEntry, getJobsForMonth } from './job-availability';
+import { listAssignments, upcomingConfirmedAssignments } from './assignments';
+import { listCalendarEvents } from './gas-client';
+import { parseBookingDescription } from './booking-parse';
 import { rollingDateRange, monthsInRollingRange } from './date-range';
 import { log } from './log';
 
@@ -97,9 +100,40 @@ export async function handleDriverMessage(
     return;
   }
 
+  if (text.includes('เช็คงาน') || text.includes('งานของฉัน') || text.includes('ตารางงาน')) {
+    const assignments = await listAssignments();
+    const upcoming = upcomingConfirmedAssignments(assignments, driver.driver_id);
+
+    if (upcoming.length === 0) {
+      await reply(replyToken, buildUpcomingJobsText([]));
+      return;
+    }
+
+    // ดึง Calendar เฉพาะช่วงที่ครอบคลุมงานทั้งหมดที่เจอ (วันแรก-วันสุดท้าย) เอา description มาแปะรายละเอียดให้ครบ
+    const fromIso = `${upcoming[0].job_date}T00:00:00+07:00`;
+    const toIso = `${upcoming[upcoming.length - 1].job_date}T23:59:59+07:00`;
+    const calRes = await listCalendarEvents(fromIso, toIso);
+    const events = calRes.ok ? calRes.data ?? [] : [];
+
+    const jobs = upcoming.map((a) => {
+      const event = events.find((e) => e.eventId === a.booking_event_id);
+      const parsed = event ? parseBookingDescription(event.description) : null;
+      return {
+        jobDate: a.job_date,
+        jobStartTime: a.job_start_time,
+        guest: parsed?.guest ?? '-',
+        from: parsed?.from ?? '-',
+        to: parsed?.to ?? '-',
+        bookingNo: parsed?.bookingNo ?? '-',
+      };
+    });
+    await reply(replyToken, buildUpcomingJobsText(jobs));
+    return;
+  }
+
   await reply(replyToken, {
     type: 'text',
-    text: 'พิมพ์ "วันว่าง" เพื่อส่งวันว่างขับ (ตั้งแต่วันนี้ถึงสิ้นเดือนหน้า) หรือ "ขอลา" เพื่อขอลา/เปลี่ยนวันครับ',
+    text: 'พิมพ์ "วันว่าง" เพื่อส่งวันว่างขับ (ตั้งแต่วันนี้ถึงสิ้นเดือนหน้า), "เช็คงาน" เพื่อดูงานที่ยืนยันแล้วของคุณ หรือ "ขอลา" เพื่อขอลา/เปลี่ยนวันครับ',
   });
 }
 

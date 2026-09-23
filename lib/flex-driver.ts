@@ -199,3 +199,31 @@ export function buildJobNoticeText(job: {
   ].join('\n');
   return { type: 'text', text };
 }
+
+/** ตอบตอนคนขับพิมพ์ "เช็คงาน" — สรุปงานที่ยืนยันแล้วทั้งหมดที่กำลังจะมาถึง เรียงตามวันที่ */
+export function buildUpcomingJobsText(
+  jobs: Array<{
+    jobDate: string;
+    jobStartTime: string;
+    guest: string;
+    from: string;
+    to: string;
+    bookingNo: string;
+  }>
+): Message {
+  if (jobs.length === 0) {
+    return { type: 'text', text: 'ยังไม่มีงานที่ยืนยันแล้วในอนาคตครับ 🙏' };
+  }
+  const lines = [`📋 งานที่ยืนยันแล้วของคุณ (${jobs.length} งาน)`, ''];
+  for (const j of jobs) {
+    const { date, weekday } = (() => {
+      const [y, m, d] = j.jobDate.split('-').map(Number);
+      return { date: `${d} ${THAI_MONTHS[m - 1]}`, weekday: THAI_WEEKDAYS[new Date(y, m - 1, d).getDay()] };
+    })();
+    lines.push(`🗓 ${date} (${weekday}) ${j.jobStartTime}`);
+    lines.push(`${j.from} → ${j.to}`);
+    lines.push(`Guest: ${j.guest} | Booking No: ${j.bookingNo}`);
+    lines.push('');
+  }
+  return { type: 'text', text: lines.join('\n').trim() };
+}

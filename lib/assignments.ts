@@ -122,6 +122,16 @@ export async function markNeedsReassignment(bookingEventId: string): Promise<voi
   // หมายเหตุ: ตั้งใจไม่ลบบรรทัด Driver: ใน Calendar ทันที — รอแชมป์ยืนยันคนขับคนใหม่ก่อน
 }
 
+/** งานที่ยืนยันแล้ว (confirmed/notified) ของคนขับคนนี้ ตั้งแต่วันนี้เป็นต้นไป เรียงตามวันที่/เวลา — ใช้ตอนคนขับพิมพ์ "เช็คงาน" */
+export function upcomingConfirmedAssignments(assignments: AssignmentRow[], driverId: string): AssignmentRow[] {
+  const today = new Date().toISOString().slice(0, 10);
+  return assignments
+    .filter(
+      (a) => a.driver_id === driverId && (a.status === 'confirmed' || a.status === 'notified') && a.job_date >= today
+    )
+    .sort((a, b) => (a.job_date + a.job_start_time).localeCompare(b.job_date + b.job_start_time));
+}
+
 export function hasConflict(
   assignments: AssignmentRow[],
   driverId: string,
