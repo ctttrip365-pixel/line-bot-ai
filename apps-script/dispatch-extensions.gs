@@ -36,6 +36,8 @@ function doPost(e) {
       return jsonResponse(sheetAppend(payload.tab, payload.row));
     case 'sheet_update':
       return jsonResponse(sheetUpdateRow(payload.tab, payload.matchColumn, payload.matchValue, payload.patch));
+    case 'sheet_write_grid':
+      return jsonResponse(sheetWriteGrid_(payload.tab, payload.values, payload.backgrounds));
     default:
       return jsonResponse({ ok: false, error: 'unknown action: ' + payload.action });
   }
@@ -54,11 +56,14 @@ function getCalendar_() {
   return CalendarApp.getCalendarById(calendarId);
 }
 
-function calendarList(fromIso, toIso) {
+function calendarList(fromIso, toIso, calendarId) {
   try {
-    const events = getCalendar_().getEvents(new Date(fromIso), new Date(toIso));
+    const cal = calendarId ? CalendarApp.getCalendarById(calendarId) : getCalendar_();
+    const events = cal.getEvents(new Date(fromIso), new Date(toIso));
     const data = events.map((ev) => ({
-      eventId: ev.getId(),
+      // CalendarApp คืน eventId มีหาง "@google.com" ต่อท้าย ต่างจาก REST API — ตัดออกให้ตรงกับที่
+      // ฝั่ง Next.js เทียบ eventId กัน (ไม่งั้น matching ทุกจุดที่เทียบ eventId จะพลาดหมด)
+      eventId: ev.getId().split('@')[0],
       summary: ev.getTitle(),
       description: ev.getDescription() || '',
       start: ev.getStartTime().toISOString(),
@@ -96,6 +101,19 @@ function getSheet_(tabName) {
   return SpreadsheetApp.openById(sheetId).getSheetByName(tabName);
 }
 
+/**
+ * Google Sheets เก็บช่องที่ดูเหมือน date/time ("2026-09-24", "11:00") เป็น native Date object
+ * จริงๆ เบื้องหลัง — String(dateObj) ให้ผลแบบ "Sat Dec 30 1899 11:00:00 GMT+..." (Dec 30 1899 คือ
+ * epoch ภายในของ Sheets สำหรับช่อง "เวลาอย่างเดียว") ต้องเช็ค Date แล้ว format เอง ไม่งั้นทุกแท็บ
+ * ที่มีคอลัมน์วันที่/เวลาจะอ่านออกมาเพี้ยน (เจอจริงกับ job_date/job_start_time ใน Assignments_Log)
+ */
+function formatCellValue_(v) {
+  if (v === undefined || v === null || v === '') return '';
+  if (Object.prototype.toString.call(v) !== '[object Date]') return String(v);
+  const isTimeOnly = v.getFullYear() === 1899 && v.getMonth() === 11 && v.getDate() === 30;
+  return Utilities.formatDate(v, 'Asia/Bangkok', isTimeOnly ? 'HH:mm' : 'yyyy-MM-dd');
+}
+
 function sheetRead(tabName) {
   try {
     const sheet = getSheet_(tabName);
@@ -103,10 +121,33 @@ function sheetRead(tabName) {
     const headers = values[0];
     const rows = values.slice(1).map((row) => {
       const obj = {};
-      headers.forEach((h, i) => (obj[h] = row[i] !== undefined ? String(row[i]) : ''));
+      headers.forEach((h, i) => (obj[h] = formatCellValue_(row[i])));
       return obj;
     });
     return { ok: true, data: rows };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
+/**
+ * เขียนทับทั้งแท็บด้วยตาราง 2 มิติดิบๆ (สร้างแท็บใหม่ถ้ายังไม่มี) — ใช้กับแท็บสรุปรายเดือน
+ * ที่แชมป์อ่านเอง (เช่น "2026-10") ไม่ใช่ข้อมูลที่ระบบอ่านกลับ
+ * `backgrounds` (optional) ต้องมีมิติเท่า values เป๊ะ — ช่องไหน null ปล่อยเป็นสีที่ clear() ทำไว้ (ขาว)
+ */
+function sheetWriteGrid_(tabName, values, backgrounds) {
+  try {
+    const sheetId = PropertiesService.getScriptProperties().getProperty('DRIVER_SHEET_ID');
+    const ss = SpreadsheetApp.openById(sheetId);
+    let sheet = ss.getSheetByName(tabName);
+    if (!sheet) sheet = ss.insertSheet(tabName);
+    sheet.clear();
+    const range = sheet.getRange(1, 1, values.length, values[0].length);
+    range.setValues(values);
+    if (backgrounds) range.setBackgrounds(backgrounds);
+    // 3 แถวหัว (วันในสัปดาห์/เลขวัน/Available) + กันชนไว้ให้คนขับเพิ่มได้ถึง ~9 คนโดยไม่ต้องมาขยับ freeze เอง
+    sheet.setFrozenRows(12);
+    return { ok: true };
   } catch (err) {
     return { ok: false, error: String(err) };
   }
