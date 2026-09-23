@@ -7,6 +7,7 @@
 // send these same strings later via LINE Official Account Manager without any
 // code change here.
 
+import { after } from 'next/server';
 import { Client } from '@line/bot-sdk';
 import { Driver } from './drivers';
 import { buildAvailabilityCarousel, buildLeaveDatePicker, buildUpcomingJobsText } from './flex-driver';
@@ -26,6 +27,7 @@ import { listAssignments, upcomingConfirmedAssignments } from './assignments';
 import { listCalendarEvents } from './gas-client';
 import { parseBookingDescription } from './booking-parse';
 import { rollingDateRange, monthsInRollingRange } from './date-range';
+import { runDispatchMatch } from './dispatch-match';
 import { log } from './log';
 
 function getLineClient() {
@@ -221,6 +223,9 @@ export async function handleDriverPostback(
       type: 'text',
       text: `ส่งวันว่างแล้วครับ (${selected.length} รายการ)${droppedCount ? ` — ${droppedCount} งานมีคนขับแล้วก่อนที่จะส่ง เลยตัดออกให้` : ''} ขอบคุณครับ 🙏`,
     });
+    // รันจับคู่คนขับทันทีหลังตอบ LINE เสร็จ (ไม่บล็อกการตอบ) — จะได้ไม่ต้องรอ cron ทุก 30 นาที
+    // ถ้าวันว่างที่เพิ่งส่งไปช่วยปิดงานที่ยังไม่มีคนขับได้พอดี
+    after(() => runDispatchMatch().catch((err) => log.error('dispatch_match.trigger_failed', { err: (err as Error).message })));
     return;
   }
 
