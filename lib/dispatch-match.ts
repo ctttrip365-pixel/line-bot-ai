@@ -103,8 +103,8 @@ export async function runDispatchMatch(): Promise<{ proposed: number; noMatch: n
   // auto-confirm ทุกอย่างยกเว้น needs_reassignment (มาจากอนุมัติลา — ยังต้องผ่านขั้นกดยืนยันเสมอ)
   const isAutoConfirmEligible = (eventId: string) => latestByEvent.get(eventId)?.status !== 'needs_reassignment';
 
-  const jobCountThatDay = (driverId: string, jobDate: string) =>
-    assignments.filter((a) => a.driver_id === driverId && a.job_date === jobDate && a.status !== 'cancelled').length;
+  const jobCountThatDay = (driverId: string, jobDate: string, otherAssignments: AssignmentRow[]) =>
+    otherAssignments.filter((a) => a.driver_id === driverId && a.job_date === jobDate && a.status !== 'cancelled').length;
 
   const proposals: Proposal[] = unmatched.map((ev) => {
     const { date: jobDate, time: jobStartTime } = toBangkokParts(ev.start);
@@ -113,11 +113,16 @@ export async function runDispatchMatch(): Promise<{ proposed: number; noMatch: n
       [parsed.bookingNo, parsed.guest, parsed.from && parsed.to ? `${parsed.from}→${parsed.to}` : ''].filter(Boolean).join(' | ') ||
       ev.summary;
 
+    // ตัดแถวของ booking นี้เองออกก่อนเช็คชนเวลา/นับงานต่อวัน — ไม่งั้นตอน re-match booking ที่เคย
+    // "proposed" ไปแล้ว แถวเก่าของมันเองจะโดนนับเป็น "งานอื่นที่ชนเวลาพอดี" (ชนกับตัวเองแบบผิดๆ)
+    // ทำให้คนขับที่เคยถูกเสนอไปแล้วดูเหมือนไม่ว่างสำหรับงานนี้ ทั้งที่จริงว่าง
+    const otherAssignments = assignments.filter((a) => a.booking_event_id !== ev.eventId);
+
     const candidates = activeDrivers.filter((d: Driver) => {
       const isAvailable =
         d.role === 'owner' ? champDates.includes(jobDate) : isDriverAvailableForJob(availIndex, d.driver_id, jobDate, ev.eventId);
       if (!isAvailable) return false;
-      return !hasConflict(assignments, d.driver_id, jobDate, jobStartTime, DEFAULT_JOB_DURATION_HOURS);
+      return !hasConflict(otherAssignments, d.driver_id, jobDate, jobStartTime, DEFAULT_JOB_DURATION_HOURS);
     });
 
     if (candidates.length === 0) {
@@ -132,7 +137,9 @@ export async function runDispatchMatch(): Promise<{ proposed: number; noMatch: n
     }
 
     candidates.sort(
-      (a, b) => jobCountThatDay(a.driver_id, jobDate) - jobCountThatDay(b.driver_id, jobDate) || a.display_name.localeCompare(b.display_name)
+      (a, b) =>
+        jobCountThatDay(a.driver_id, jobDate, otherAssignments) - jobCountThatDay(b.driver_id, jobDate, otherAssignments) ||
+        a.display_name.localeCompare(b.display_name)
     );
     const chosen = candidates[0];
 
