@@ -26,6 +26,7 @@ interface ProposalNoMatch {
   noMatch: true;
   bookingEventId: string;
   jobDate: string;
+  jobStartTime?: string; // HH:MM — optional, not all noMatch proposals know the pickup time yet
   summaryText: string;
   reason: string;
 }
@@ -50,7 +51,7 @@ export async function POST(req: Request) {
         [
           '⚠️ <b>ไม่มีคนขับในทีมว่าง</b>',
           `งาน: ${p.summaryText}`,
-          `วันที่: ${p.jobDate}`,
+          `วันที่: ${p.jobDate}${p.jobStartTime ? ` ${p.jobStartTime}` : ''}`,
           `เหตุผล: ${p.reason}`,
           '',
           'กด "จัดคนขับเอง" เพื่อเลือกคนขับด้วยมือได้เลย (เช่น คนขับสำรองที่ไม่มี LINE) หรือถ้าไม่มีใครในทีมจริงๆ ต้องหารถนอกเอง',
