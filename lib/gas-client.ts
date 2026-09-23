@@ -62,6 +62,16 @@ export function listCalendarEvents(fromIso: string, toIso: string, calendarId?: 
   return callGas('calendar_list', { from: fromIso, to: toIso, calendarId });
 }
 
+// เผื่อ event บางอันไม่มีบรรทัด "Booking No:" ครบ (เจอจริง — VTL2937 leg 25 ก.ย. มีแค่โน้ตสั้นๆ
+// ไม่มี "Booking No:" เลย) เช็คคำอื่นที่บ่งบอกว่าเป็น booking จริงด้วย ทั้งใน title และ description
+const BOOKING_KEYWORDS = ['booking no:', 'vtl', 'woa', 'ctt', 'day trip'];
+
+/** ใช้เช็คว่า Calendar event นี้คือ "งานจริงที่ต้องมีคนขับ" ไม่ใช่ OFF/reminder/event อื่นที่อยู่ปฏิทินเดียวกัน */
+export function isBookingEvent(ev: CalendarEventSummary): boolean {
+  const haystack = `${ev.summary} ${ev.description}`.toLowerCase();
+  return BOOKING_KEYWORDS.some((k) => haystack.includes(k));
+}
+
 /** Append/replace the "Driver: ..." line in an event's description. */
 export function updateCalendarEventDriver(eventId: string, driverLine: string | null): Promise<GasResponse<void>> {
   return callGas('calendar_update_driver', { eventId, driverLine });

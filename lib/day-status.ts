@@ -5,7 +5,7 @@
 // cheap cached copy instead of hitting Calendar/Sheets on every message.
 
 import { Redis } from '@upstash/redis';
-import { listCalendarEvents } from './gas-client';
+import { listCalendarEvents, isBookingEvent } from './gas-client';
 import { listAssignments } from './assignments';
 import { toBangkokParts } from './date-range';
 import { log } from './log';
@@ -49,12 +49,12 @@ export async function computeDayStatusMap(month: string): Promise<Record<string,
 
   const [calRes, assignments] = await Promise.all([listCalendarEvents(fromIso, toIso), listAssignments()]);
 
-  // "มี booking จริง" ตัดสินจาก description มี "Booking No:" (field ที่ ctt-booking เขียนไว้เสมอ)
-  // กันไม่ให้ all-day OFF/กะ AirAsia ที่อยู่ใน calendar เดียวกันถูกนับเป็น booking
+  // "มี booking จริง" ตัดสินจาก isBookingEvent() (ดู lib/gas-client.ts — เช็คคำว่า Booking No:/VTL/WOA/CTT/Day Trip
+  // ทั้งใน title และ description) กันไม่ให้ all-day OFF/กะ AirAsia ที่อยู่ใน calendar เดียวกันถูกนับเป็น booking
   const bookingDates = new Set<string>();
   if (calRes.ok && calRes.data) {
     for (const ev of calRes.data) {
-      if (ev.description?.includes('Booking No:')) {
+      if (isBookingEvent(ev)) {
         // ห้ามใช้ ev.start.slice(0, 10) ตรงๆ — ev.start เป็น UTC ISO เสมอ (มาจาก Apps Script's
         // ev.getStartTime().toISOString()) งานที่เริ่มก่อน 07:00 น. เวลาไทยจะตกไปนับเป็นวันก่อนหน้า
         bookingDates.add(toBangkokParts(ev.start).date);

@@ -10,7 +10,7 @@
 // invalidated the moment a confirm/reassign happens (see app/api/telegram-webhook).
 
 import { Redis } from '@upstash/redis';
-import { listCalendarEvents } from './gas-client';
+import { listCalendarEvents, isBookingEvent } from './gas-client';
 import { listAssignments } from './assignments';
 import { listDrivers, findDriverById } from './drivers';
 import { toBangkokParts } from './date-range';
@@ -57,7 +57,7 @@ export async function computeJobsForMonth(month: string): Promise<Record<string,
   }
 
   for (const ev of calRes.data) {
-    if (!ev.description?.includes('Booking No:')) continue; // ไม่ใช่ booking จริง (OFF/shift/reminder อื่นๆ ที่อยู่ปฏิทินเดียวกัน)
+    if (!isBookingEvent(ev)) continue; // ไม่ใช่ booking จริง (OFF/shift/reminder อื่นๆ ที่อยู่ปฏิทินเดียวกัน)
 
     const { date, time } = toBangkokParts(ev.start);
     const assignment = assignments.find((a) => a.booking_event_id === ev.eventId);
