@@ -13,15 +13,16 @@
 // conflict), just executed inline so it can run for free in milliseconds instead
 // of spinning up an agent session.
 //
-// Confirmation gate (แชมป์'s decision, 2026-09-23): a "fresh" booking — one that
-// has never had ANY driver assigned to it, regardless of when the booking itself
-// came in — auto-confirms the moment a match is found, no Telegram button tap
-// needed. A booking reopened via an approved leave request (status
-// needs_reassignment) is NOT fresh — that path still goes through the
-// propose-then-confirm flow, same as before. See CLAUDE.md §7 "ปรัชญาการออกแบบ
-// agent" for why this distinction matters: a fresh match is the algorithm's own
-// first attempt, but a reassignment follows a leave-approval decision Champ
-// already made deliberately, so the driver swap still gets a final look.
+// Confirmation gate (แชมป์'s decision, 2026-09-23, extended same day): any
+// booking with no row yet, or a row still sitting at "proposed" (never got a
+// Telegram button tap), auto-confirms the moment a match is found — no manual
+// tap needed, regardless of how long it's been sitting unconfirmed or whether
+// this is its first match attempt or a re-run. A booking reopened via an
+// approved leave request (status needs_reassignment) is the one exception —
+// that path still goes through the propose-then-confirm flow, same as before,
+// since it follows a leave-approval decision Champ already made deliberately
+// and the driver swap still deserves a final look (CLAUDE.md §7 "ปรัชญาการออกแบบ
+// agent").
 
 import { listCalendarEvents, isBookingEvent } from './gas-client';
 import { listDrivers, Driver } from './drivers';
@@ -87,18 +88,20 @@ export async function runDispatchMatch(): Promise<{ proposed: number; noMatch: n
 
   const activeDrivers = drivers.filter((d) => String(d.active).toUpperCase() === 'TRUE');
 
-  // booking ที่ยังไม่มีแถวเลย ("fresh" — auto-confirm ได้ถ้าจับคู่ได้) หรือแถวล่าสุดสถานะ
-  // needs_reassignment (เพิ่งอนุมัติลาไป — ยังต้องผ่านขั้นกดยืนยันเหมือนเดิม) — ทั้งคู่นับว่า "ยังไม่มีคนขับ"
+  // booking ที่ยังไม่มีแถวเลย, หรือแถวล่าสุดสถานะ "proposed" (เสนอไปแล้วแต่แชมป์ยังไม่กดยืนยัน —
+  // ขยายให้ auto-confirm ครอบคลุมด้วยตามที่แชมป์ยืนยัน 2026-09-23), หรือ needs_reassignment
+  // (เพิ่งอนุมัติลาไป) — ทั้งสามนับว่า "ยังไม่มีคนขับ [จริง]" ต้องลองจับคู่ใหม่ทุกครั้งที่รันมา
   const latestByEvent = new Map<string, AssignmentRow>();
   for (const a of assignments) latestByEvent.set(a.booking_event_id, a);
   const unmatched = calRes.data.filter(isBookingEvent).filter((ev) => {
     const row = latestByEvent.get(ev.eventId);
-    return !row || row.status === 'needs_reassignment';
+    return !row || row.status === 'needs_reassignment' || row.status === 'proposed';
   });
 
   if (unmatched.length === 0) return { proposed: 0, noMatch: 0 };
 
-  const isFresh = (eventId: string) => !latestByEvent.has(eventId);
+  // auto-confirm ทุกอย่างยกเว้น needs_reassignment (มาจากอนุมัติลา — ยังต้องผ่านขั้นกดยืนยันเสมอ)
+  const isAutoConfirmEligible = (eventId: string) => latestByEvent.get(eventId)?.status !== 'needs_reassignment';
 
   const jobCountThatDay = (driverId: string, jobDate: string) =>
     assignments.filter((a) => a.driver_id === driverId && a.job_date === jobDate && a.status !== 'cancelled').length;
@@ -141,7 +144,7 @@ export async function runDispatchMatch(): Promise<{ proposed: number; noMatch: n
       summaryText,
       driverId: chosen.driver_id,
       driverDisplayName: chosen.display_name,
-      autoConfirm: isFresh(ev.eventId),
+      autoConfirm: isAutoConfirmEligible(ev.eventId),
     };
   });
 
