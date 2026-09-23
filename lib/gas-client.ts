@@ -100,14 +100,14 @@ export function sheetUpdateRow(
  * เขียนทับทั้งแท็บด้วยตาราง 2 มิติดิบๆ (สร้างแท็บใหม่ถ้ายังไม่มี) — ใช้สำหรับ
  * แท็บสรุปที่คนอ่าน เช่น ตารางแถว=คนขับ/คอลัมน์=วันที่ ไม่ใช่ข้อมูลที่ระบบอ่านกลับ
  *
- * `backgrounds` (ถ้ามี) ต้องมีมิติเท่า `values` เป๊ะๆ — แต่ละช่องเป็นสี CSS (เช่น "#FFA500")
- * หรือ null ถ้าไม่ต้องการยุ่งกับพื้นหลังช่องนั้น (Apps Script's setBackgrounds ปล่อยของเดิมไว้
- * เมื่อเจอ null — sheet.clear() ที่รันก่อนหน้าเคลียร์เป็นสีขาวให้อยู่แล้ว ไม่ต้องระบุขาวซ้ำ)
+ * `backgrounds` (ถ้ามี) ต้องมีมิติเท่า `values` เป๊ะๆ — แต่ละช่องเป็นสี CSS ชัดเจน (เช่น "#FFA500"
+ * หรือ "#ffffff") ตั้งใจไม่ใช้ null เพราะ Apps Script's Range.setBackgrounds ไม่ document พฤติกรรม
+ * null ไว้ชัดเจน ส่งสีขาวตรงๆ สำหรับช่องที่ไม่ต้องการไฮไลต์แทน กันเขียนพังทั้งกริด
  */
 export function writeGrid(
   tab: string,
   values: (string | number)[][],
-  backgrounds?: (string | null)[][]
+  backgrounds?: string[][]
 ): Promise<GasResponse<void>> {
   return callGas('sheet_write_grid', { tab, values, backgrounds });
 }

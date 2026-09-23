@@ -11,6 +11,7 @@ import { toBangkokParts } from './date-range';
 import { log } from './log';
 
 const AVAILABLE_ROW_COLOR = '#FFA500'; // ส้ม — วันที่มี booking จริง (isBookingEvent) ตามที่แชมป์สั่ง
+const WHITE = '#ffffff'; // ส่งชัดเจนแทน null — Range.setBackgrounds ของ Apps Script ไม่ document พฤติกรรม null ไว้ กันเขียนพัง
 
 const THAI_WEEKDAYS = ['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'];
 
@@ -84,11 +85,11 @@ export async function buildAndWriteMonthGrid(month: string): Promise<void> {
 
   const values = [weekdayRow, dayNumberRow, availableRow, ...driverRows];
 
-  // ระบายสีเฉพาะแถว "Available" (index 2) — ช่องอื่นปล่อย null (sheet.clear() ฝั่ง Apps Script เคลียร์เป็นขาวให้อยู่แล้ว)
-  const backgrounds: (string | null)[][] = values.map((row) => new Array(row.length).fill(null));
+  // ระบายสีทุกช่องแบบชัดเจน (ขาวเป็นค่าเริ่มต้น) — ไม่พึ่ง null เพราะ Apps Script ไม่ document ว่ารองรับ
+  const backgrounds: string[][] = values.map((row) => new Array(row.length).fill(WHITE));
   for (let d = 1; d <= daysCount; d++) {
     const date = `${month}-${String(d).padStart(2, '0')}`;
-    backgrounds[2][d] = bookingDates.has(date) ? AVAILABLE_ROW_COLOR : null;
+    backgrounds[2][d] = bookingDates.has(date) ? AVAILABLE_ROW_COLOR : WHITE;
   }
 
   const res = await writeGrid(month, values, backgrounds);

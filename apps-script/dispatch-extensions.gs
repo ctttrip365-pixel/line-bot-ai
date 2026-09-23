@@ -133,7 +133,8 @@ function sheetRead(tabName) {
 /**
  * เขียนทับทั้งแท็บด้วยตาราง 2 มิติดิบๆ (สร้างแท็บใหม่ถ้ายังไม่มี) — ใช้กับแท็บสรุปรายเดือน
  * ที่แชมป์อ่านเอง (เช่น "2026-10") ไม่ใช่ข้อมูลที่ระบบอ่านกลับ
- * `backgrounds` (optional) ต้องมีมิติเท่า values เป๊ะ — ช่องไหน null ปล่อยเป็นสีที่ clear() ทำไว้ (ขาว)
+ * `backgrounds` (optional) ต้องมีมิติเท่า values เป๊ะ — ส่งสี CSS ชัดเจนทุกช่อง (เช่น "#ffffff" สำหรับ
+ * ช่องที่ไม่ไฮไลต์) ไม่ใช้ null เพราะ setBackgrounds ไม่ document พฤติกรรม null ไว้ชัดเจน
  */
 function sheetWriteGrid_(tabName, values, backgrounds) {
   try {
