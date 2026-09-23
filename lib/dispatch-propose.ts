@@ -12,7 +12,7 @@
 // against duplicate Sheet rows / duplicate Telegram cards with short Redis locks.
 
 import { Redis } from '@upstash/redis';
-import { proposeAssignment } from './assignments';
+import { proposeAssignment, confirmAssignment } from './assignments';
 import { sendTelegramMessage } from './telegram';
 import { log } from './log';
 
@@ -25,6 +25,11 @@ export interface ProposalWithMatch {
   summaryText: string; // e.g. "VTL3050 | Mr.Smith | Krabi Airport→Ao Nang"
   driverId: string;
   driverDisplayName: string;
+  // true เฉพาะ booking ที่ไม่เคยมีคนขับมาก่อนเลย ("fresh" ตามที่แชมป์นิยาม — ไม่เกี่ยวกับวันที่รับ booking
+  // เข้ามา) — ข้ามขั้น "รอกดยืนยัน" ไปเลย ยืนยันอัตโนมัติทันที (ยังแจ้ง Telegram แบบ FYI + ปุ่มเปลี่ยนคนขับ
+  // ไว้เผื่อแชมป์อยากสลับทีหลัง) ส่วน booking ที่เคย confirmed แล้วแต่ถูกปลดกลับมา (needs_reassignment —
+  // เช่นจากการอนุมัติลา) ยังต้องผ่านขั้นกดยืนยันเหมือนเดิมเสมอ ไม่ auto-confirm ให้
+  autoConfirm?: boolean;
 }
 
 export interface ProposalNoMatch {
@@ -93,6 +98,23 @@ export async function processDispatchProposals(proposals: Proposal[]): Promise<v
     }
     if (!acquired) {
       log.info('dispatch_propose.skipped_locked', { bookingEventId: p.bookingEventId });
+      continue;
+    }
+
+    if (p.autoConfirm) {
+      // fresh booking (ไม่เคยมีคนขับมาก่อนเลย) — ยืนยันอัตโนมัติทันทีตามที่แชมป์ตัดสินใจ (2026-09-23)
+      // ไม่ต้องรอกดยืนยันใน Telegram แล้ว ยังคง Driver: ใน Calendar description ให้เหมือนเดิมทุกอย่าง
+      await confirmAssignment(p.bookingEventId, p.driverId, p.driverDisplayName);
+      await sendTelegramMessage(
+        [
+          '✅ <b>จับคู่คนขับอัตโนมัติแล้ว</b>',
+          `งาน: ${p.summaryText}`,
+          `วันที่: ${p.jobDate} ${p.jobStartTime}`,
+          `คนขับ: ${p.driverDisplayName}`,
+        ].join('\n'),
+        [[{ text: '🔄 เปลี่ยนคนขับ', callback_data: `reassign:${p.bookingEventId}` }]]
+      );
+      sentCount += 1;
       continue;
     }
 
