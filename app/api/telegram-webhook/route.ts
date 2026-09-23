@@ -9,9 +9,17 @@ import { confirmAssignment } from '@/lib/assignments';
 import { listDrivers } from '@/lib/drivers';
 import { getLeaveRequest, resolveLeaveRequest } from '@/lib/leave';
 import { markNeedsReassignment } from '@/lib/assignments';
+import { invalidateJobsCache } from '@/lib/job-availability';
+import { monthsInRollingRange } from '@/lib/date-range';
 import { log } from '@/lib/log';
 
 export const runtime = 'nodejs';
+
+// ไม่รู้ job_date ของ booking ที่ถูกยืนยัน/ปลดจาก callback data ตรงๆ (มีแค่ eventId) — ล้าง cache
+// ทุกเดือนที่ picker แสดงอยู่ตอนนี้ไปเลย ปลอดภัยกว่าและถูกกว่าการเสีย round-trip ไปหา job_date จริงก่อน
+async function invalidateJobsCacheForVisibleMonths(): Promise<void> {
+  await Promise.all(monthsInRollingRange().map((m) => invalidateJobsCache(m)));
+}
 
 export async function POST(req: Request) {
   const secretHeader = req.headers.get('x-telegram-bot-api-secret-token');
@@ -30,6 +38,7 @@ export async function POST(req: Request) {
     if (action === 'confirm_assign') {
       const [bookingEventId, driverId, driverDisplayName] = rest;
       await confirmAssignment(bookingEventId, driverId, driverDisplayName);
+      await invalidateJobsCacheForVisibleMonths(); // คนขับคนอื่นที่เปิด picker ต่อจากนี้ต้องเห็นว่างานนี้มีคนขับแล้วทันที
       await answerCallbackQuery(cq.id, 'ยืนยันแล้ว ✅');
       await sendTelegramMessage(`✅ ยืนยันแล้ว: ${driverDisplayName} รับงาน ${bookingEventId}`);
     } else if (action === 'reassign') {
@@ -55,6 +64,7 @@ export async function POST(req: Request) {
         const request = await getLeaveRequest(requestId);
         if (request?.affected_booking_event_id) {
           await markNeedsReassignment(request.affected_booking_event_id);
+          await invalidateJobsCacheForVisibleMonths(); // งานนี้เปิดว่างอีกครั้ง — เคลียร์ cache ให้ picker เห็นทันที
           await sendTelegramMessage(
             `🔁 อนุมัติลาแล้ว — งาน ${request.affected_booking_event_id} ต้องหาคนขับแทน (ระบบจะเสนอในรอบถัดไป)`
           );

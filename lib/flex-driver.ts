@@ -3,8 +3,9 @@
 // button (postback), never open-ended chat, so the sales-bot accuracy problem
 // documented elsewhere in this repo doesn't apply here at all.
 
-import { FlexBubble, FlexMessage, Message } from '@line/bot-sdk';
+import { FlexBubble, FlexComponent, FlexMessage, Message } from '@line/bot-sdk';
 import { DayStatus } from './day-status';
+import { JobEntry } from './job-availability';
 
 const THAI_WEEKDAYS = ['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'];
 const THAI_MONTHS = [
@@ -12,12 +13,12 @@ const THAI_MONTHS = [
   'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.',
 ];
 
-function dayLabel(date: string, status?: DayStatus): string {
-  // "1 พฤ" หรือ "1 พฤ · ไม่มีงาน" ถ้ามีข้อมูลสถานะ booking ของวันนั้น
+function dayLabel(date: string, suffix?: string): string {
+  // "1 พฤ" หรือ "1 พฤ · 09:45" ถ้ามีข้อความต่อท้าย (สถานะ booking หรือเวลาจริงของงาน)
   const [y, m, d] = date.split('-').map(Number);
   const weekday = THAI_WEEKDAYS[new Date(y, m - 1, d).getDay()];
   const base = `${d} ${weekday}`;
-  return status ? `${base} · ${status}` : base;
+  return suffix ? `${base} · ${suffix}` : base;
 }
 
 /** ป้ายหัว bubble รายสัปดาห์ เช่น "29 ก.ย. – 5 ต.ค." (คร่อมเดือนได้ เพราะ dates เป็น rolling window) */
@@ -36,16 +37,64 @@ function chunk<T>(arr: T[], size: number): T[][] {
 }
 
 /**
+ * แต่ละวันแสดงได้ 3 แบบ ขึ้นกับจำนวนงานจริงวันนั้น (jobsByDate มาจาก lib/job-availability.ts):
+ * - ไม่มีงาน: ปุ่มเดียว ป้าย "ไม่มีงาน", data "avail:pick:{date}"
+ * - มีงานเดียว ยังไม่มีคนขับ: ปุ่มเดียว ป้ายเป็นเวลาจริงของงาน, data "avail:pick:{date}"
+ * - มีงานเดียว มีคนขับแล้ว: ไม่ทำเป็นปุ่ม (LINE Flex ปุ่มไม่มี disabled state) เป็นข้อความเฉยๆ กดไม่ได้
+ * - มีหลายงาน: แยกปุ่มต่องาน data "avail:pick:{date}#{eventId}" — งานไหนมีคนขับแล้วก็เป็นข้อความเหมือนข้างบน
+ */
+function renderDateEntries(date: string, jobs: JobEntry[], selected: Set<string>): FlexComponent[] {
+  if (jobs.length === 0) {
+    return [
+      {
+        type: 'button',
+        style: selected.has(date) ? 'primary' : 'secondary',
+        height: 'sm',
+        action: {
+          type: 'postback',
+          label: dayLabel(date, 'ไม่มีงาน'),
+          data: `avail:pick:${date}`,
+          displayText: `เลือกวันที่ ${dayLabel(date)} (${date})`,
+        },
+      },
+    ];
+  }
+
+  return jobs.map((job): FlexComponent => {
+    if (job.confirmed) {
+      return {
+        type: 'text',
+        text: `🔒 ${dayLabel(date, job.startTime)} — มีคนขับแล้ว (${job.confirmedDriverName ?? '-'})`,
+        size: 'xs',
+        wrap: true,
+        color: '#999999',
+      };
+    }
+    const token = jobs.length === 1 ? date : `${date}#${job.eventId}`;
+    return {
+      type: 'button',
+      style: selected.has(token) ? 'primary' : 'secondary',
+      height: 'sm',
+      action: {
+        type: 'postback',
+        label: dayLabel(date, job.startTime),
+        data: `avail:pick:${token}`,
+        displayText: `เลือกวันที่ ${dayLabel(date, job.startTime)} (${date})`,
+      },
+    };
+  });
+}
+
+/**
  * carousel ของปุ่มเลือกวัน — 1 bubble ต่อสัปดาห์ (~7 วัน/bubble)
  * `dates` คือ rolling window "วันนี้ → สิ้นเดือนหน้า" (ดู lib/date-range.ts) คร่อมได้ 2 เดือนปฏิทิน
- * postback data: "avail:pick:{date}" ต่อวันที่ถูกกด, ปุ่มสุดท้ายรวม "avail:submit"
- * (แต่ละวันคงเดือนของตัวเองอยู่ในตัว YYYY-MM-DD อยู่แล้ว ไม่ต้องแนบเดือนแยกอีก — ดู handleDriverPostback ที่จัดกลุ่มตามเดือนตอนบันทึก)
- * เลือกได้หลายวัน (bot toggle สถานะไว้ใน Redis จนกว่าจะกด submit — ดู app/api/line-webhook)
+ * postback data: "avail:pick:{date}" (งานเดียว/ไม่มีงาน) หรือ "avail:pick:{date}#{eventId}" (วันที่มีหลายงาน)
+ * เลือกได้หลายรายการ (bot toggle สถานะไว้ใน Redis จนกว่าจะกด submit — ดู app/api/line-webhook)
  */
 export function buildAvailabilityCarousel(
   dates: string[],
   selectedDates: string[],
-  dayStatus?: Record<string, DayStatus>
+  jobsByDate: Record<string, JobEntry[]>
 ): FlexMessage {
   const weeks = chunk(dates, 7);
   const selected = new Set(selectedDates);
@@ -58,17 +107,7 @@ export function buildAvailabilityCarousel(
       layout: 'vertical',
       contents: [
         { type: 'text', text: weekRangeLabel(week), weight: 'bold', size: 'sm', wrap: true },
-        ...week.map((date) => ({
-          type: 'button' as const,
-          style: (selected.has(date) ? 'primary' : 'secondary') as 'primary' | 'secondary',
-          height: 'sm' as const,
-          action: {
-            type: 'postback' as const,
-            label: dayLabel(date, dayStatus?.[date]),
-            data: `avail:pick:${date}`,
-            displayText: `เลือกวันที่ ${dayLabel(date)} (${date})`,
-          },
-        })),
+        ...week.flatMap((date) => renderDateEntries(date, jobsByDate[date] ?? [], selected)),
       ],
     },
   }));

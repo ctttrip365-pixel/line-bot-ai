@@ -24,3 +24,16 @@ export function rollingDateRange(): string[] {
 export function monthsInRollingRange(): string[] {
   return Array.from(new Set(rollingDateRange().map((d) => d.slice(0, 7))));
 }
+
+/**
+ * แปลง ISO timestamp (UTC เสมอ — มาจาก Apps Script's `ev.getStartTime().toISOString()`)
+ * เป็นวันที่/เวลาไทยที่ถูกต้อง — ห้ามใช้ `.slice(0, 10)` ตรงๆ กับ ISO string เพราะงานที่เริ่ม
+ * ก่อน 07:00 น. เวลาไทย จะตกไปอยู่วันก่อนหน้าใน UTC (เช่น 06:00 ไทย = 23:00 UTC ของเมื่อวาน)
+ */
+export function toBangkokParts(iso: string): { date: string; time: string } {
+  const bangkok = new Date(new Date(iso).getTime() + 7 * 60 * 60 * 1000);
+  return {
+    date: `${bangkok.getUTCFullYear()}-${String(bangkok.getUTCMonth() + 1).padStart(2, '0')}-${String(bangkok.getUTCDate()).padStart(2, '0')}`,
+    time: `${String(bangkok.getUTCHours()).padStart(2, '0')}:${String(bangkok.getUTCMinutes()).padStart(2, '0')}`,
+  };
+}

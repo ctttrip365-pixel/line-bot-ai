@@ -7,6 +7,7 @@
 import { Redis } from '@upstash/redis';
 import { listCalendarEvents } from './gas-client';
 import { listAssignments } from './assignments';
+import { toBangkokParts } from './date-range';
 import { log } from './log';
 
 export type DayStatus = 'ว่าง' | 'ไม่มีงาน' | 'มีคนขับ';
@@ -54,14 +55,20 @@ export async function computeDayStatusMap(month: string): Promise<Record<string,
   if (calRes.ok && calRes.data) {
     for (const ev of calRes.data) {
       if (ev.description?.includes('Booking No:')) {
-        bookingDates.add(ev.start.slice(0, 10));
+        // ห้ามใช้ ev.start.slice(0, 10) ตรงๆ — ev.start เป็น UTC ISO เสมอ (มาจาก Apps Script's
+        // ev.getStartTime().toISOString()) งานที่เริ่มก่อน 07:00 น. เวลาไทยจะตกไปนับเป็นวันก่อนหน้า
+        bookingDates.add(toBangkokParts(ev.start).date);
       }
     }
   } else {
     log.error('day_status.calendar_read_failed', { month, error: calRes.error });
   }
 
-  const confirmedDates = new Set(assignments.filter((a) => a.status === 'confirmed').map((a) => a.job_date));
+  // 'notified' คือ 'confirmed' เดิมที่ผ่านการแจ้งคนขับไปแล้ว (ดู markNotified) — ยังนับว่ามีคนขับแล้วเหมือนกัน
+  // ไม่งั้นวันที่แจ้งเตือนคนขับไปแล้วจะโชว์ผิดว่า "ว่าง" อีกครั้งพอ cron รอบถัดไปคำนวณใหม่
+  const confirmedDates = new Set(
+    assignments.filter((a) => a.status === 'confirmed' || a.status === 'notified').map((a) => a.job_date)
+  );
 
   const map: Record<string, DayStatus> = {};
   for (let d = 1; d <= daysCount; d++) {

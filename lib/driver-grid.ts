@@ -24,7 +24,11 @@ async function driverAvailableSet(driver: Driver, month: string, monthRows: { dr
     return new Set(await getChampAvailability(fromIso, toIso));
   }
   const row = monthRows.find((r) => r.driver_id === driver.driver_id);
-  return new Set(row?.available_dates ? row.available_dates.split(',').map((d) => d.trim()) : []);
+  // token อาจเป็น "YYYY-MM-DD" เฉยๆ หรือ "YYYY-MM-DD#eventId" (วันที่มีหลายงาน — ดู lib/job-availability.ts)
+  // ตัด "#eventId" ทิ้งก่อนเทียบ เพราะกริดนี้สรุปแค่ระดับวัน ไม่แยกรายงาน
+  return new Set(
+    row?.available_dates ? row.available_dates.split(',').map((d) => d.trim().split('#')[0]) : []
+  );
 }
 
 export async function buildAndWriteMonthGrid(month: string): Promise<void> {

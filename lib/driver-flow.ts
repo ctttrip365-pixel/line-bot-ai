@@ -21,6 +21,7 @@ import { submitAvailability } from './availability';
 import { createLeaveRequest } from './leave';
 import { sendTelegramMessage } from './telegram';
 import { DayStatus, getDayStatusMap } from './day-status';
+import { JobEntry, getJobsForMonth } from './job-availability';
 import { rollingDateRange, monthsInRollingRange } from './date-range';
 import { log } from './log';
 
@@ -31,9 +32,15 @@ function getLineClient() {
   });
 }
 
-/** รวม day-status ของทุกเดือนที่ rolling window แตะ (ปกติเดือนนี้+เดือนหน้า) เป็น map เดียว */
+/** รวม day-status ของทุกเดือนที่ rolling window แตะ (ปกติเดือนนี้+เดือนหน้า) เป็น map เดียว — ใช้กับ leave picker เท่านั้น */
 async function combinedDayStatus(): Promise<Record<string, DayStatus>> {
   const maps = await Promise.all(monthsInRollingRange().map((m) => getDayStatusMap(m)));
+  return Object.assign({}, ...maps);
+}
+
+/** รวม per-job map ของทุกเดือนที่ rolling window แตะ — ใช้กับ availability picker (ต้องสดกว่า day-status) */
+async function combinedJobsByDate(): Promise<Record<string, JobEntry[]>> {
+  const maps = await Promise.all(monthsInRollingRange().map((m) => getJobsForMonth(m)));
   return Object.assign({}, ...maps);
 }
 
@@ -78,8 +85,8 @@ export async function handleDriverMessage(
 
   if (text.includes('วันว่าง')) {
     const dates = rollingDateRange();
-    const [selected, dayStatus] = await Promise.all([getSelectedDates(driver.driver_id), combinedDayStatus()]);
-    await reply(replyToken, buildAvailabilityCarousel(dates, selected, dayStatus));
+    const [selected, jobsByDate] = await Promise.all([getSelectedDates(driver.driver_id), combinedJobsByDate()]);
+    await reply(replyToken, buildAvailabilityCarousel(dates, selected, jobsByDate));
     return;
   }
 
@@ -104,30 +111,70 @@ export async function handleDriverPostback(
   const [action, ...rest] = data.split(':');
 
   if (action === 'avail' && rest[0] === 'pick') {
-    const [, date] = rest;
-    const selected = await toggleAvailabilityDate(driver.driver_id, date);
+    const [, token] = rest;
+    const [date, eventId] = token.split('#');
+    const jobs = (await getJobsForMonth(date.slice(0, 7)))[date] ?? [];
+
+    // เช็คสถานะสดก่อนอนุญาตให้ toggle — กันคนขับกดปุ่มจากการ์ดเก่าที่ค้างอยู่หลังงานนั้นมีคนขับไปแล้ว
+    if (eventId) {
+      const job = jobs.find((j) => j.eventId === eventId);
+      if (job?.confirmed) {
+        await reply(replyToken, {
+          type: 'text',
+          text: `ขออภัยครับ งานวันที่ ${date} เวลา ${job.startTime} มีคนขับแล้วครับ (${job.confirmedDriverName ?? '-'}) — เลือกงานอื่นแทนได้เลยครับ`,
+        });
+        return;
+      }
+    } else if (jobs.length === 1 && jobs[0].confirmed) {
+      await reply(replyToken, {
+        type: 'text',
+        text: `ขออภัยครับ วันที่ ${date} มีคนขับแล้วครับ (${jobs[0].confirmedDriverName ?? '-'})`,
+      });
+      return;
+    }
+
+    const selected = await toggleAvailabilityDate(driver.driver_id, token);
+    const timeLabel = eventId ? ` ${jobs.find((j) => j.eventId === eventId)?.startTime ?? ''}` : '';
     await reply(replyToken, {
       type: 'text',
-      text: `${selected.includes(date) ? '✅ เลือก' : '➖ ยกเลิก'}วันที่ ${date} (ตอนนี้เลือกไว้ ${selected.length} วัน — เลือกต่อได้เลย แล้วกด "ส่งวันว่าง" ที่ bubble สุดท้าย)`,
+      text: `${selected.includes(token) ? '✅ เลือก' : '➖ ยกเลิก'}วันที่ ${date}${timeLabel} (ตอนนี้เลือกไว้ ${selected.length} รายการ — เลือกต่อได้เลย แล้วกด "ส่งวันว่าง" ที่ bubble สุดท้าย)`,
     });
     return;
   }
 
   if (action === 'avail' && rest[0] === 'submit') {
-    const selected = await getSelectedDates(driver.driver_id);
+    const rawSelected = await getSelectedDates(driver.driver_id);
+
+    // re-validate ก่อนบันทึกจริง — กันเคสงานถูกยืนยันคนขับไปแล้วระหว่างที่คนขับกำลังเลือกอยู่ (ระหว่าง pick ครั้งแรกกับตอนกด submit)
+    const monthsTouched = Array.from(new Set(rawSelected.map((t) => t.slice(0, 7))));
+    const jobMapsByMonth = new Map(await Promise.all(monthsTouched.map(async (m) => [m, await getJobsForMonth(m)] as const)));
+
+    let droppedCount = 0;
+    const selected = rawSelected.filter((token) => {
+      const [date, eventId] = token.split('#');
+      if (!eventId) return true; // token เปล่า ไม่ผูกงานเจาะจง ไม่มีอะไรให้ค้าง
+      const jobs = jobMapsByMonth.get(date.slice(0, 7))?.[date] ?? [];
+      const job = jobs.find((j) => j.eventId === eventId);
+      if (job?.confirmed) {
+        droppedCount += 1;
+        return false;
+      }
+      return true;
+    });
+
     // rolling window คร่อมได้หลายเดือนปฏิทิน — แยกวันตามเดือนก่อนเขียนลง Availability_Monthly (1 แถว/เดือน)
     const byMonth = new Map<string, string[]>();
-    for (const date of selected) {
-      const month = date.slice(0, 7);
-      byMonth.set(month, [...(byMonth.get(month) ?? []), date]);
+    for (const token of selected) {
+      const month = token.slice(0, 7);
+      byMonth.set(month, [...(byMonth.get(month) ?? []), token]);
     }
-    for (const [month, datesInMonth] of Array.from(byMonth.entries())) {
-      await submitAvailability(driver.driver_id, month, datesInMonth);
+    for (const [month, tokensInMonth] of Array.from(byMonth.entries())) {
+      await submitAvailability(driver.driver_id, month, tokensInMonth);
     }
     await clearSelectedDates(driver.driver_id);
     await reply(replyToken, {
       type: 'text',
-      text: `ส่งวันว่างแล้วครับ (${selected.length} วัน) ขอบคุณครับ 🙏`,
+      text: `ส่งวันว่างแล้วครับ (${selected.length} รายการ)${droppedCount ? ` — ${droppedCount} งานมีคนขับแล้วก่อนที่จะส่ง เลยตัดออกให้` : ''} ขอบคุณครับ 🙏`,
     });
     return;
   }
