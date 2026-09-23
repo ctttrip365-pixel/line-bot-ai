@@ -121,16 +121,8 @@ export async function runDispatchMatch(): Promise<{ proposed: number; noMatch: n
     const candidates = activeDrivers.filter((d: Driver) => {
       const isAvailable =
         d.role === 'owner' ? champDates.includes(jobDate) : isDriverAvailableForJob(availIndex, d.driver_id, jobDate, ev.eventId);
-      const conflict = isAvailable && hasConflict(otherAssignments, d.driver_id, jobDate, jobStartTime, DEFAULT_JOB_DURATION_HOURS);
-      log.info('dispatch_match.debug_candidate', {
-        bookingEventId: ev.eventId,
-        driverId: d.driver_id,
-        jobDate,
-        isAvailable,
-        conflict,
-        availTokens: Array.from(availIndex.get(d.driver_id) ?? []),
-      });
-      return isAvailable && !conflict;
+      if (!isAvailable) return false;
+      return !hasConflict(otherAssignments, d.driver_id, jobDate, jobStartTime, DEFAULT_JOB_DURATION_HOURS);
     });
 
     if (candidates.length === 0) {
