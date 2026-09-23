@@ -63,10 +63,21 @@ export async function handleDriverMessage(
   // ถ้ากำลังรอเหตุผลการลาอยู่ (พิมพ์ต่อจากเลือกวันแล้ว) ให้ตีความข้อความนี้เป็นเหตุผลก่อนเช็คคีย์เวิร์ดอื่น
   const pendingDate = await popPendingLeaveDate(driver.driver_id);
   if (pendingDate) {
+    // หา booking ที่คนขับคนนี้ confirmed/notified ไว้แล้ววันที่ขอลา (ถ้ามี) — ผูกไว้ใน
+    // affected_booking_event_id ตอนสร้างคำขอเลย ไม่งั้น telegram-webhook หา event ที่ต้องหาคนขับแทน
+    // ไม่เจอ (affected_booking_event_id ว่างเปล่าตลอด แม้แชมป์กดอนุมัติ ก็จะไม่มีอะไรเกิดขึ้นกับ booking นั้น)
+    const assignments = await listAssignments();
+    const affected = assignments.find(
+      (a) =>
+        a.driver_id === driver.driver_id &&
+        a.job_date === pendingDate &&
+        (a.status === 'confirmed' || a.status === 'notified')
+    );
     const requestId = await createLeaveRequest({
       driverId: driver.driver_id,
       dates: [pendingDate],
       reason: text,
+      affectedBookingEventId: affected?.booking_event_id,
     });
     await sendTelegramMessage(
       [
