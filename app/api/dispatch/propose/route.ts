@@ -53,8 +53,9 @@ export async function POST(req: Request) {
           `วันที่: ${p.jobDate}`,
           `เหตุผล: ${p.reason}`,
           '',
-          'ต้องหารถนอกเองครับ (ระบบยังไม่ได้ broadcast หาให้อัตโนมัติ)',
-        ].join('\n')
+          'กด "จัดคนขับเอง" เพื่อเลือกคนขับด้วยมือได้เลย (เช่น คนขับสำรองที่ไม่มี LINE) หรือถ้าไม่มีใครในทีมจริงๆ ต้องหารถนอกเอง',
+        ].join('\n'),
+        [[{ text: '👤 จัดคนขับเอง', callback_data: `reassign:${p.bookingEventId}` }]]
       );
       continue;
     }

@@ -3,7 +3,8 @@
 // line is only a human-readable mirror of the `confirmed` rows here — this Sheet is
 // what the code actually queries for conflicts and for "who's driving tomorrow".
 
-import { sheetRead, sheetAppendRow, sheetUpdateRow, updateCalendarEventDriver } from './gas-client';
+import { sheetRead, sheetAppendRow, sheetUpdateRow, updateCalendarEventDriver, listCalendarEvents } from './gas-client';
+import { toBangkokParts } from './date-range';
 import { log } from './log';
 
 export type AssignmentStatus =
@@ -55,21 +56,55 @@ export async function proposeAssignment(row: {
   log.info('assignment.proposed', row);
 }
 
-/** แชมป์กด "ยืนยัน" ใน Telegram — เติมบรรทัด Driver: ใน Calendar description ด้วย */
+/**
+ * แชมป์กด "ยืนยัน" ใน Telegram — เติมบรรทัด Driver: ใน Calendar description ด้วย
+ * รองรับ 2 เคส: (1) booking ที่เคย proposeAssignment ไว้แล้ว (มีแถวอยู่แล้ว) → update
+ * (2) booking ที่ไม่เคยจับคู่อัตโนมัติได้เลย (noMatch) แล้วแชมป์กด "จัดคนขับเอง" → ไม่มีแถวเลย ต้อง insert ใหม่
+ * เคส (2) ไม่รู้ job_date/job_start_time จาก callback_data (Telegram จำกัดความยาวข้อความปุ่ม ใส่ไปด้วยไม่ได้)
+ * เลยต้องไปหาจาก Calendar event จริงแทน
+ */
 export async function confirmAssignment(
   bookingEventId: string,
   driverId: string,
   driverDisplayName: string
 ): Promise<void> {
-  await sheetUpdateRow('Assignments_Log', 'booking_event_id', bookingEventId, {
-    driver_id: driverId,
-    status: 'confirmed',
-    confirmed_at: new Date().toISOString(),
-  });
+  const existing = await listAssignments();
+  const hasRow = existing.some((a) => a.booking_event_id === bookingEventId);
+
+  if (hasRow) {
+    await sheetUpdateRow('Assignments_Log', 'booking_event_id', bookingEventId, {
+      driver_id: driverId,
+      status: 'confirmed',
+      confirmed_at: new Date().toISOString(),
+    });
+  } else {
+    const today = new Date();
+    const toDate = new Date(today);
+    toDate.setDate(toDate.getDate() + 60);
+    const fromIso = `${today.toISOString().slice(0, 10)}T00:00:00+07:00`;
+    const toIso = `${toDate.toISOString().slice(0, 10)}T23:59:59+07:00`;
+    const calRes = await listCalendarEvents(fromIso, toIso);
+    const event = calRes.ok ? calRes.data?.find((e) => e.eventId === bookingEventId) : undefined;
+    const parts = event ? toBangkokParts(event.start) : { date: '', time: '' };
+    if (!event) log.warn('assignment.confirm_new_row_event_not_found', { bookingEventId });
+
+    await sheetAppendRow('Assignments_Log', {
+      booking_event_id: bookingEventId,
+      calendar_id: 'ctt.trip365@gmail.com',
+      driver_id: driverId,
+      status: 'confirmed',
+      job_date: parts.date,
+      job_start_time: parts.time,
+      proposed_at: '',
+      confirmed_at: new Date().toISOString(),
+      notified_at: '',
+    });
+  }
+
   // ไม่ต้องใส่ prefix "Driver: " เอง — Apps Script (calendarUpdateDriver_) เติมให้แล้ว
   // ใส่ซ้ำเองมาก่อนหน้านี้ทำให้ description ออกมาเป็น "Driver: Driver: Ball (ball)"
   await updateCalendarEventDriver(bookingEventId, `${driverDisplayName} (${driverId})`);
-  log.info('assignment.confirmed', { bookingEventId, driverId });
+  log.info('assignment.confirmed', { bookingEventId, driverId, wasNew: !hasRow });
 }
 
 export async function markNotified(bookingEventId: string): Promise<void> {
