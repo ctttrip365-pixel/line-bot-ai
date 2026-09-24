@@ -28,18 +28,14 @@ import { listCalendarEvents, isBookingEvent } from './gas-client';
 import { listDrivers, Driver } from './drivers';
 import { listAssignments, hasConflict, AssignmentRow } from './assignments';
 import { getAllAvailabilityForMonth, getChampAvailability } from './availability';
-import { toBangkokParts, monthsInRollingRange } from './date-range';
+import { toBangkokParts, monthsInRollingRange, rollingDateRange } from './date-range';
 import { parseBookingDescription } from './booking-parse';
 import { processDispatchProposals, Proposal } from './dispatch-propose';
 import { invalidateJobsCache } from './job-availability';
+import { isDispatchAutoMatchEnabled } from './settings';
 import { log } from './log';
 
-const MATCH_WINDOW_DAYS = 14; // เท่ากับ window เดิมที่ ctt-dispatch skill ใช้
 const DEFAULT_JOB_DURATION_HOURS = 2; // ค่า conservative เดียวกับที่ hasConflict() ใช้กับงานอื่นอยู่แล้ว
-
-function toIsoDate(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
 
 async function buildAvailabilityIndex(months: string[]): Promise<Map<string, Set<string>>> {
   const rows = (await Promise.all(months.map((m) => getAllAvailabilityForMonth(m)))).flat();
@@ -67,11 +63,17 @@ function isDriverAvailableForJob(
 }
 
 export async function runDispatchMatch(): Promise<{ proposed: number; noMatch: number }> {
-  const today = new Date();
-  const windowEnd = new Date(today);
-  windowEnd.setDate(windowEnd.getDate() + MATCH_WINDOW_DAYS);
-  const fromIso = `${toIsoDate(today)}T00:00:00+07:00`;
-  const toIso = `${toIsoDate(windowEnd)}T23:59:59+07:00`;
+  if (!(await isDispatchAutoMatchEnabled())) {
+    log.info('dispatch_match.paused_by_setting');
+    return { proposed: 0, noMatch: 0 };
+  }
+
+  // หน้าต่างจับคู่ต้องยาวเท่ากับที่คนขับกรอกวันว่างได้จริง (วันนี้ → สิ้นเดือนหน้า) ไม่งั้นคนขับ
+  // เลือกวันไกลๆ ไว้ล่วงหน้าแล้วงานจะไม่ถูกจับคู่จนกว่าจะใกล้ถึงวันจริง — แชมป์ยืนยันแล้ว 2026-09-25
+  // ว่าอยากให้จับคู่ได้ทันทีเท่าที่คนขับกรอกได้เลย ไม่ต้องจำกัดแค่ 14 วันแบบเดิม
+  const dates = rollingDateRange();
+  const fromIso = `${dates[0]}T00:00:00+07:00`;
+  const toIso = `${dates[dates.length - 1]}T23:59:59+07:00`;
 
   const [calRes, assignments, drivers, availIndex, champDates] = await Promise.all([
     listCalendarEvents(fromIso, toIso),
