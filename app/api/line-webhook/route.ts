@@ -14,7 +14,11 @@ import { handleDriverMessage, handleDriverPostback } from '@/lib/driver-flow';
 import { log } from '@/lib/log';
 
 export const runtime = 'nodejs';
-export const maxDuration = 30;
+// bumped from 30s — the avail:submit handler's after() now runs runDispatchMatch() over a much
+// wider Calendar window (rollingDateRange(), ~2 months instead of 14 days), which can take longer
+// than 30s given Apps Script's cold-start latency on each call; the LINE reply itself is already
+// sent long before this, so raising this only extends how long the background work gets to finish
+export const maxDuration = 60;
 
 function getLineClient() {
   return new Client({

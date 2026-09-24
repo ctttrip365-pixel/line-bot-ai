@@ -9,7 +9,9 @@ import { runDispatchMatch } from '@/lib/dispatch-match';
 import { log } from '@/lib/log';
 
 export const runtime = 'nodejs';
-export const maxDuration = 30;
+// bumped from 30s — window ตอนนี้ยาวเท่า rollingDateRange() (เกือบ 2 เดือน แทน 14 วันเดิม) ยิ่งช่วง
+// วันกว้างขึ้น ยิ่งมี Calendar event ให้ Apps Script (cold-start ช้าอยู่แล้ว) ประมวลผลมากขึ้นตามไปด้วย
+export const maxDuration = 60;
 
 export async function GET(req: Request) {
   const auth = req.headers.get('authorization');
