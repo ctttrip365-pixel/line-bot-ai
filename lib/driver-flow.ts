@@ -28,6 +28,7 @@ import { listCalendarEvents } from './gas-client';
 import { parseBookingDescription } from './booking-parse';
 import { rollingDateRange, monthsInRollingRange } from './date-range';
 import { runDispatchMatch } from './dispatch-match';
+import { isDispatchAutoMatchEnabled } from './settings';
 import { log } from './log';
 
 function getLineClient() {
@@ -219,13 +220,20 @@ export async function handleDriverPostback(
       await submitAvailability(driver.driver_id, month, tokensInMonth);
     }
     await clearSelectedDates(driver.driver_id);
+
+    // เช็คสวิตช์ก่อนตอบ — วันว่างบันทึกสำเร็จเสมอไม่ว่าสวิตช์จะเปิดหรือปิด แค่ยังไม่จับคู่ให้ตอนนี้
+    // ถ้าปิดอยู่ ต้องบอกคนขับตรงๆ ไม่งั้นจะงงว่าทำไมส่งไปแล้วไม่มีงานตอบกลับมาเลย (แชมป์ขอ 2026-09-25)
+    const autoMatchEnabled = await isDispatchAutoMatchEnabled();
+    const pausedNote = autoMatchEnabled ? '' : '\n\nตอนนี้ยังไม่เปิดให้รับงาน เดี๋ยวแชมป์จะแจ้งให้ทราบอีกครั้งนะครับ';
     await reply(replyToken, {
       type: 'text',
-      text: `ส่งวันว่างแล้วครับ (${selected.length} รายการ)${droppedCount ? ` — ${droppedCount} งานมีคนขับแล้วก่อนที่จะส่ง เลยตัดออกให้` : ''} ขอบคุณครับ 🙏`,
+      text: `ส่งวันว่างแล้วครับ (${selected.length} รายการ)${droppedCount ? ` — ${droppedCount} งานมีคนขับแล้วก่อนที่จะส่ง เลยตัดออกให้` : ''} ขอบคุณครับ 🙏${pausedNote}`,
     });
-    // รันจับคู่คนขับทันทีหลังตอบ LINE เสร็จ (ไม่บล็อกการตอบ) — จะได้ไม่ต้องรอ cron ทุก 30 นาที
-    // ถ้าวันว่างที่เพิ่งส่งไปช่วยปิดงานที่ยังไม่มีคนขับได้พอดี
-    after(() => runDispatchMatch().catch((err) => log.error('dispatch_match.trigger_failed', { err: (err as Error).message })));
+    if (autoMatchEnabled) {
+      // รันจับคู่คนขับทันทีหลังตอบ LINE เสร็จ (ไม่บล็อกการตอบ) — จะได้ไม่ต้องรอ cron ทุก 30 นาที
+      // ถ้าวันว่างที่เพิ่งส่งไปช่วยปิดงานที่ยังไม่มีคนขับได้พอดี
+      after(() => runDispatchMatch().catch((err) => log.error('dispatch_match.trigger_failed', { err: (err as Error).message })));
+    }
     return;
   }
 
