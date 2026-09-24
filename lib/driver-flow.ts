@@ -191,6 +191,17 @@ export async function handleDriverPostback(
   }
 
   if (action === 'avail' && rest[0] === 'submit') {
+    // ปิดสวิตช์อยู่ — ไม่บันทึกเลย ไม่ใช่แค่ไม่จับคู่ (แชมป์ตัดสินใจ 2026-09-25: วันว่างที่ส่งมาช่วงปิด
+    // ไม่ให้ค้างไว้รอจับคู่ย้อนหลังตอนเปิดสวิตช์กลับ ให้คนขับส่งเข้ามาใหม่ทีเดียวตอนเปิดรับงานอีกครั้ง)
+    if (!(await isDispatchAutoMatchEnabled())) {
+      await clearSelectedDates(driver.driver_id);
+      await reply(replyToken, {
+        type: 'text',
+        text: 'ตอนนี้ยังไม่เปิดให้รับงานครับ ยังไม่บันทึกวันว่างที่เลือกไว้ — รบกวนส่งวันว่างใหม่อีกครั้งตอนแชมป์เปิดรับงานนะครับ 🙏',
+      });
+      return;
+    }
+
     const rawSelected = await getSelectedDates(driver.driver_id);
 
     // re-validate ก่อนบันทึกจริง — กันเคสงานถูกยืนยันคนขับไปแล้วระหว่างที่คนขับกำลังเลือกอยู่ (ระหว่าง pick ครั้งแรกกับตอนกด submit)
@@ -220,20 +231,13 @@ export async function handleDriverPostback(
       await submitAvailability(driver.driver_id, month, tokensInMonth);
     }
     await clearSelectedDates(driver.driver_id);
-
-    // เช็คสวิตช์ก่อนตอบ — วันว่างบันทึกสำเร็จเสมอไม่ว่าสวิตช์จะเปิดหรือปิด แค่ยังไม่จับคู่ให้ตอนนี้
-    // ถ้าปิดอยู่ ต้องบอกคนขับตรงๆ ไม่งั้นจะงงว่าทำไมส่งไปแล้วไม่มีงานตอบกลับมาเลย (แชมป์ขอ 2026-09-25)
-    const autoMatchEnabled = await isDispatchAutoMatchEnabled();
-    const pausedNote = autoMatchEnabled ? '' : '\n\nตอนนี้ยังไม่เปิดให้รับงาน เดี๋ยวแชมป์จะแจ้งให้ทราบอีกครั้งนะครับ';
     await reply(replyToken, {
       type: 'text',
-      text: `ส่งวันว่างแล้วครับ (${selected.length} รายการ)${droppedCount ? ` — ${droppedCount} งานมีคนขับแล้วก่อนที่จะส่ง เลยตัดออกให้` : ''} ขอบคุณครับ 🙏${pausedNote}`,
+      text: `ส่งวันว่างแล้วครับ (${selected.length} รายการ)${droppedCount ? ` — ${droppedCount} งานมีคนขับแล้วก่อนที่จะส่ง เลยตัดออกให้` : ''} ขอบคุณครับ 🙏`,
     });
-    if (autoMatchEnabled) {
-      // รันจับคู่คนขับทันทีหลังตอบ LINE เสร็จ (ไม่บล็อกการตอบ) — จะได้ไม่ต้องรอ cron ทุก 30 นาที
-      // ถ้าวันว่างที่เพิ่งส่งไปช่วยปิดงานที่ยังไม่มีคนขับได้พอดี
-      after(() => runDispatchMatch().catch((err) => log.error('dispatch_match.trigger_failed', { err: (err as Error).message })));
-    }
+    // รันจับคู่คนขับทันทีหลังตอบ LINE เสร็จ (ไม่บล็อกการตอบ) — จะได้ไม่ต้องรอ cron ทุก 30 นาที
+    // ถ้าวันว่างที่เพิ่งส่งไปช่วยปิดงานที่ยังไม่มีคนขับได้พอดี (สวิตช์เปิดอยู่แน่นอน — เช็คไปแล้วต้นฟังก์ชัน)
+    after(() => runDispatchMatch().catch((err) => log.error('dispatch_match.trigger_failed', { err: (err as Error).message })));
     return;
   }
 
