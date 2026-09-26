@@ -121,8 +121,13 @@ export async function runDispatchMatch(): Promise<{ proposed: number; noMatch: n
     const otherAssignments = assignments.filter((a) => a.booking_event_id !== ev.eventId);
 
     const candidates = activeDrivers.filter((d: Driver) => {
+      // owner (แชมป์) เดิมเช็คแค่ AirAsia OFF-calendar อย่างเดียว — แต่แชมป์ก็กด "วันว่าง" ผ่าน LINE
+      // เหมือนคนขับคนอื่นได้เหมือนกัน (เห็นจริงจาก Availability_Monthly มีแถว champ) และคาดหวังว่า
+      // ส่งแล้วจะมีผล ถ้าเช็คแค่ปฏิทิน AirAsia อย่างเดียว พอปฏิทินเดือนนั้นยังไม่ sync (เช่นตารางเวร
+      // เดือนใหม่ที่ยังไม่รัน airasia-shift) การส่งวันว่างของแชมป์เองจะเงียบหายไปเฉยๆ ไม่มีผลอะไรเลย
+      // ตอนนี้เลยนับว่างจากทั้งสองทาง — ปฏิทิน AirAsia (อัตโนมัติ) หรือกดส่งวันว่างเอง (เหมือนคนขับคนอื่น)
       const isAvailable =
-        d.role === 'owner' ? champDates.includes(jobDate) : isDriverAvailableForJob(availIndex, d.driver_id, jobDate, ev.eventId);
+        (d.role === 'owner' && champDates.includes(jobDate)) || isDriverAvailableForJob(availIndex, d.driver_id, jobDate, ev.eventId);
       if (!isAvailable) return false;
       return !hasConflict(otherAssignments, d.driver_id, jobDate, jobStartTime, DEFAULT_JOB_DURATION_HOURS);
     });
