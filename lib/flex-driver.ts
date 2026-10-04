@@ -176,6 +176,13 @@ export function buildLeaveDatePicker(dates: string[], dayStatus?: Record<string,
   };
 }
 
+/** YYYY-MM-DD → 05Oct26 */
+function formatJobDate(ymd: string): string {
+  const [y, m, d] = ymd.split('-');
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${d}${months[Number(m) - 1]}${y.slice(2)}`;
+}
+
 export function buildJobNoticeText(job: {
   guest: string;
   from: string;
@@ -184,15 +191,16 @@ export function buildJobNoticeText(job: {
   contact: string;
   pickupTime: string;
   bookingNo: string;
+  jobDate?: string; // YYYY-MM-DD
 }): Message {
   const text = [
-    '📋 งานพรุ่งนี้',
+    `📋 งานพรุ่งนี้${job.jobDate ? ` (${formatJobDate(job.jobDate)})` : ''}`,
     `Guest: ${job.guest}`,
     `From: ${job.from}`,
     `To: ${job.to}`,
     `Pax: ${job.pax}`,
     `Contact: ${job.contact}`,
-    `เวลารับ: ${job.pickupTime}`,
+    `เวลารับ: ${job.pickupTime || 'TBA'}`,
     `Booking No: ${job.bookingNo}`,
     '',
     'มีปัญหาติดต่อแชมป์ได้เลยครับ 🙏',

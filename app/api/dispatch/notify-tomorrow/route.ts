@@ -58,8 +58,20 @@ export async function GET(req: Request) {
     }
 
     const parsed = parseBookingDescription(event.description);
+    // เวลารับ: ใช้เวลาเริ่มของ event ใน Calendar เป็นหลัก (แม่นกว่าบรรทัดใน description ที่ชื่อไม่คงที่)
+    const startTime = event.start
+      ? new Intl.DateTimeFormat('en-GB', {
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+          timeZone: 'Asia/Bangkok',
+        }).format(new Date(event.start))
+      : '';
     try {
-      await getLineClient().pushMessage(driver.line_user_id, buildJobNoticeText({ ...parsed }));
+      await getLineClient().pushMessage(
+        driver.line_user_id,
+        buildJobNoticeText({ ...parsed, pickupTime: startTime || parsed.pickupTime, jobDate: a.job_date })
+      );
       await markNotified(a.booking_event_id);
       sent += 1;
     } catch (err) {

@@ -26,7 +26,8 @@ export function parseBookingDescription(description: string): ParsedBooking {
     to: extract(description, 'To'),
     pax: extract(description, 'Pax'),
     contact: extract(description, 'Contact'),
-    pickupTime: extract(description, 'Boat/Flight time'),
+    pickupTime:
+      extract(description, 'Boat/Flight time') || extract(description, 'Arrive'),
     bookingNo: extract(description, 'Booking No'),
   };
 }
