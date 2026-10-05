@@ -6,6 +6,7 @@
 import { sheetRead, sheetAppendRow, sheetUpdateRow, updateCalendarEventDriver, listCalendarEvents } from './gas-client';
 import { toBangkokParts } from './date-range';
 import { log } from './log';
+import { sendTelegramMessage } from './telegram';
 
 export type AssignmentStatus =
   | 'proposed'
@@ -103,7 +104,25 @@ export async function confirmAssignment(
 
   // ไม่ต้องใส่ prefix "Driver: " เอง — Apps Script (calendarUpdateDriver_) เติมให้แล้ว
   // ใส่ซ้ำเองมาก่อนหน้านี้ทำให้ description ออกมาเป็น "Driver: Driver: Ball (ball)"
-  await updateCalendarEventDriver(bookingEventId, `${driverDisplayName} (${driverId})`);
+  // ผลของ GAS ไม่ throw แม้ล้มเหลว (คืน { ok:false }) — เคยเงียบหายจนปฏิทินไม่มีชื่อคนขับทั้งที่ชีตยืนยันแล้ว
+  // (VTL2711, 2026-09-24) เลยต้องเช็คผลเอง ลองซ้ำ 1 ครั้ง ถ้ายังพลาดแจ้งแชมป์ใน Telegram ให้เติมเอง
+  const driverLine = `${driverDisplayName} (${driverId})`;
+  let calRes = await updateCalendarEventDriver(bookingEventId, driverLine);
+  if (!calRes.ok) {
+    log.warn('assignment.calendar_driver_retry', { bookingEventId, error: calRes.error });
+    calRes = await updateCalendarEventDriver(bookingEventId, driverLine);
+  }
+  if (!calRes.ok) {
+    log.error('assignment.calendar_driver_failed', { bookingEventId, error: calRes.error });
+    await sendTelegramMessage(
+      [
+        '⚠️ <b>เขียนชื่อคนขับลงปฏิทินไม่สำเร็จ</b>',
+        `ชีตบันทึกแล้ว: ${driverLine}`,
+        `event: ${bookingEventId}`,
+        'รบกวนเติมบรรทัด Driver: ในปฏิทินเอง',
+      ].join('\n')
+    );
+  }
   log.info('assignment.confirmed', { bookingEventId, driverId, wasNew: !hasRow });
 }
 
