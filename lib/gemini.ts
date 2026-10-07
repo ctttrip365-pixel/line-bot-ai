@@ -6,10 +6,14 @@ import type { Content } from '@google/genai';
 import { lookupPrice } from './prices';
 import { log } from './log';
 import { buildSystemPrompt } from './prompts';
+import { detectLanguage, languageRuleFor, extractReply } from './language';
 import type { ChatMessage } from './history';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 const MODEL = 'gemini-2.5-flash';
+
+export const DEFAULT_REPLY_EN =
+  'Sorry, let me check that for you — one moment please 🙏 Or you can contact Champ directly at +66 94 269 4651.';
 
 export const DEFAULT_REPLY =
   'ขออภัยนะครับ ขอเวลาเช็คให้สักครู่ได้เลยครับ 🙏 หรือโทรหาพี่แชมป์ได้เลยครับที่ +66 94 269 4651';
@@ -22,7 +26,10 @@ export async function generateReply(
   const startTime = Date.now();
   // ส่ง isFirstMessage เพื่อให้บอทไม่ทักสวัสดีซ้ำในบทสนทนาต่อเนื่อง
   const isFirstMessage = history.length === 0;
-  const systemPrompt = buildSystemPrompt(faqText, DEFAULT_REPLY, isFirstMessage);
+  // ภาษาตอบกำหนดจากโค้ด (ดูตัวอักษรในข้อความลูกค้า) ไม่ให้ Gemini เดา
+  const lang = detectLanguage(userMessage, history);
+  const fallbackReply = lang === 'thai' ? DEFAULT_REPLY : DEFAULT_REPLY_EN;
+  const systemPrompt = buildSystemPrompt(faqText, fallbackReply, isFirstMessage, languageRuleFor(lang));
 
   // Build contents array: history turns + current user message
   const contents: Content[] = [
@@ -121,11 +128,17 @@ export async function generateReply(
         candidatesTokenCount: usage?.candidatesTokenCount,
       })
     );
-    return DEFAULT_REPLY;
+    return fallbackReply;
   }
 
-  const reply = response.text?.trim();
-  if (!reply) throw new Error('gemini_empty_response');
+  // ดึงเฉพาะข้อความใน <reply> (ทิ้ง "THINK ..." ที่หลุดมา) ถ้าโมเดลเขียนความคิดล้วนๆ → ใช้ข้อความ fallback
+  const raw = response.text?.trim();
+  if (!raw) throw new Error('gemini_empty_response');
+  const reply = extractReply(raw);
+  if (!reply) {
+    log.warn('gemini.reply_unusable', { lang, startsWith: raw.slice(0, 20) });
+    return fallbackReply;
+  }
 
   return reply;
 }
