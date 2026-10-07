@@ -113,7 +113,12 @@ export async function processDispatchProposals(proposals: Proposal[]): Promise<v
           `วันที่: ${p.jobDate} ${p.jobStartTime}`,
           `คนขับ: ${p.driverDisplayName}`,
         ].join('\n'),
-        [[{ text: '🔄 เปลี่ยนคนขับ', callback_data: `reassign:${p.bookingEventId}` }]]
+        [
+          [
+            { text: '🔄 เปลี่ยนคนขับ', callback_data: `reassign:${p.bookingEventId}` },
+            { text: '❌ ยกเลิกคนขับ', callback_data: `unassign_ask:${p.bookingEventId}` },
+          ],
+        ]
       );
       sentCount += 1;
       continue;

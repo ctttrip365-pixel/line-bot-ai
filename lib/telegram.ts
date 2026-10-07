@@ -74,6 +74,12 @@ export interface TelegramCallbackQuery {
   message?: { chat: { id: number }; message_id: number };
 }
 
+export interface TelegramMessage {
+  chat: { id: number };
+  text?: string;
+}
+
 export interface TelegramUpdate {
   callback_query?: TelegramCallbackQuery;
+  message?: TelegramMessage; // ข้อความที่แชมป์พิมพ์ (เช่น /jobs) — ต้องตั้ง webhook ให้รับ update ชนิด message ด้วย
 }

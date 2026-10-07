@@ -7,6 +7,8 @@ import { sheetRead, sheetAppendRow, sheetUpdateRow, updateCalendarEventDriver, l
 import { toBangkokParts } from './date-range';
 import { log } from './log';
 import { sendTelegramMessage } from './telegram';
+import { Client } from '@line/bot-sdk';
+import { listDrivers } from './drivers';
 
 export type AssignmentStatus =
   | 'proposed'
@@ -172,4 +174,70 @@ export function hasConflict(
 function toMinutes(hhmm: string): number {
   const [h, m] = hhmm.split(':').map(Number);
   return (h || 0) * 60 + (m || 0);
+}
+
+export interface CancelResult {
+  found: boolean;
+  driverId?: string;
+  driverName?: string;
+  jobDate?: string;
+  jobStartTime?: string;
+  driverNotified: boolean; // ส่งข้อความยกเลิกให้คนขับทาง LINE แล้วหรือไม่
+  calendarOk: boolean;
+}
+
+/**
+ * แชมป์สั่ง "ยกเลิกคนขับ" ของงานที่ลงไว้แล้ว (เช่น ลงผิดคน)
+ *  - mode 'manual': สถานะ → cancelled  (ระบบจับคู่อัตโนมัติจะไม่แตะงานนี้อีก แชมป์จัดคนขับเองด้วยปุ่ม "จัดคนขับเอง")
+ *  - mode 'auto'  : สถานะ → needs_reassignment (ระบบเสนอคนขับใหม่ให้แชมป์กดยืนยันในรอบถัดไป)
+ *  - ลบบรรทัด "Driver:" ออกจากปฏิทิน (ลองซ้ำ 1 ครั้ง ถ้าพลาดแจ้งแชมป์)
+ *  - ถ้าคนขับเคยได้รับแจ้งงานแล้ว (notified_at) ส่ง LINE บอกว่างานถูกยกเลิก กันไปผิดงาน
+ */
+export async function cancelAssignment(bookingEventId: string, mode: 'manual' | 'auto'): Promise<CancelResult> {
+  const rows = await listAssignments();
+  const row = [...rows].reverse().find((a) => a.booking_event_id === bookingEventId);
+  if (!row || row.status === 'cancelled') {
+    return { found: false, driverNotified: false, calendarOk: true };
+  }
+
+  await sheetUpdateRow('Assignments_Log', 'booking_event_id', bookingEventId, {
+    status: mode === 'manual' ? 'cancelled' : 'needs_reassignment',
+  });
+
+  let calRes = await updateCalendarEventDriver(bookingEventId, null);
+  if (!calRes.ok) {
+    log.warn('assignment.cancel_calendar_retry', { bookingEventId, error: calRes.error });
+    calRes = await updateCalendarEventDriver(bookingEventId, null);
+  }
+  if (!calRes.ok) log.error('assignment.cancel_calendar_failed', { bookingEventId, error: calRes.error });
+
+  const drivers = await listDrivers();
+  const driver = drivers.find((d) => d.driver_id === row.driver_id);
+
+  let driverNotified = false;
+  if (row.notified_at && driver?.line_user_id) {
+    try {
+      await new Client({
+        channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN!,
+        channelSecret: process.env.LINE_CHANNEL_SECRET!,
+      }).pushMessage(driver.line_user_id, {
+        type: 'text',
+        text: `❌ งานวันที่ ${row.job_date} เวลา ${row.job_start_time} น. ถูกยกเลิกแล้วครับ ไม่ต้องไปรับงานนี้ ขออภัยที่แจ้งผิดนะครับ 🙏`,
+      });
+      driverNotified = true;
+    } catch (err) {
+      log.error('assignment.cancel_notify_driver_failed', { bookingEventId, err: (err as Error).message });
+    }
+  }
+
+  log.info('assignment.cancelled', { bookingEventId, mode, driverId: row.driver_id, driverNotified, calendarOk: calRes.ok });
+  return {
+    found: true,
+    driverId: row.driver_id,
+    driverName: driver?.display_name ?? row.driver_id,
+    jobDate: row.job_date,
+    jobStartTime: row.job_start_time,
+    driverNotified,
+    calendarOk: calRes.ok,
+  };
 }
