@@ -1,5 +1,7 @@
 // scripts/chat-test.mts — ทดสอบบอทแบบเต็ม (Gemini + lookup_price + ภาษา) จากเทอร์มินัล
 // ใช้คีย์จากตัวแปร GEMINI_API_KEY ในเชลล์ของคุณเอง (ไม่เก็บลงไฟล์) — ดูวิธีรันในแชท
+// FAQ ถูกค้นผ่าน tool search_faq จากชีต FAQ (บน Vercel ใช้ SHEET_CSV_URL) — ในเครื่องใช้ลิงก์ export ของชีตเดียวกัน (เปิดอ่านด้วยลิงก์ได้อยู่แล้ว)
+process.env.SHEET_CSV_URL ??= 'https://docs.google.com/spreadsheets/d/1zdqxnmr30lIYq-5lQamEDyjPl6YiUYExhIUJmVpjONk/export?format=csv';
 const { generateReply } = await import('../lib/gemini');
 
 if (!process.env.GEMINI_API_KEY) {
@@ -51,9 +53,28 @@ const oddCases: { name: string; msg: string; history?: { role: 'user' | 'model';
   { name: 'Z ปีพุทธศักราช (ต้องไม่งง แปลงเป็น ค.ศ. ให้ถูก หรือถามยืนยัน)', msg: 'อยากจองสนามบินกระบี่ไปอ่าวนาง 2 คน วันที่ 16 ตุลาคม 2569 เวลา 15:00' },
 ];
 
+// ---------- ชุดทดสอบ FAQ (รัน: npx tsx scripts/chat-test.mts faq) ----------
+const faqCases: { name: string; msg: string; history?: { role: 'user' | 'model'; text: string }[] }[] = [
+  { name: 'F1 ประกัน (ควรตอบ: ประกันชั้น 1)', msg: 'รถมีประกันไหมครับ' },
+  { name: 'F2 ติดต่อ (เบอร์/LINE/อีเมลตรงตัวอักษร)', msg: 'ขอเบอร์ติดต่อหน่อยครับ' },
+  { name: 'F3 ติดต่อ อังกฤษ', msg: 'How can I contact you guys?' },
+  { name: 'F4 เวลาเดินทาง (40-50 นาที)', msg: 'สนามบินกระบี่ไปอ่าวนางนานไหม' },
+  { name: 'F5 ค่าอุทยาน (40/400 บาท)', msg: 'ค่าเข้าอุทยานเท่าไหร่' },
+  { name: 'F6 ทัวร์พีพี (1,300 บาท/คน)', msg: 'How much is the Phi Phi island tour?' },
+  { name: 'F7 ที่นั่งเด็ก (ไม่มีใน FAQ → ต้องไม่ตอบเรื่องทัวร์เด็ก ต้องส่งต่อแชมป์)', msg: 'มีที่นั่งเด็กไหมคะ' },
+  { name: 'F8 พาหมา (ไม่มีใน FAQ → ส่งต่อแชมป์ ห้ามเดา)', msg: 'Can I bring my dog in the van?' },
+  { name: 'F9 รับที่โรงแรมได้ไหม (ต้องตอบเรื่องรับถึงที่พัก ไม่ใช่ "จองผ่านโรงแรม")', msg: 'รับที่โรงแรมได้ไหม' },
+  { name: 'F10 จ่ายเงินยังไง (ควรบอกบัตร/PromptPay ไม่เดาวิธีอื่น)', msg: 'จ่ายเงินยังไงครับ' },
+  { name: 'F11 พยากรณ์อากาศ (ปฏิเสธสุภาพ ไม่ส่งต่อ)', msg: 'พรุ่งนี้ฝนตกไหม' },
+  { name: 'F12 ถามราคารถ (ต้องเรียก lookup_price ไม่ใช่ FAQ)', msg: 'จากอ่าวนางไปสนามบินภูเก็ตราคาเท่าไหร่ 2 คน' },
+  { name: 'F13 รับกรุ๊ปบริษัท (FAQ: 10 คนขึ้นไป มีราคาพิเศษ)', msg: 'รับจัดทริปบริษัท 15 คนไหม' },
+  { name: 'F14 ฮีบรู ถามประกัน (ตอบฮีบรู/อังกฤษ ข้อมูลตรง FAQ)', msg: 'האם יש לכם ביטוח לרכבים?' },
+  { name: 'F15 ปลอดภัยไหม (คำกว้าง ตอบจาก FAQ ความปลอดภัย)', msg: 'Is it safe to travel with you?' },
+];
+
 const mode = process.argv[2];
-const toRun = mode === 'odd' ? oddCases : mode === 'all' ? [...cases, ...oddCases] : cases;
-console.log(`รัน ${toRun.length} ข้อ (โหมด: ${mode ?? 'ปกติ'})  — ใช้ "odd" รันเฉพาะคำถามแปลกๆ, "all" รันทั้งหมด`);
+const toRun = mode === 'odd' ? oddCases : mode === 'faq' ? faqCases : mode === 'all' ? [...cases, ...oddCases, ...faqCases] : cases;
+console.log(`รัน ${toRun.length} ข้อ (โหมด: ${mode ?? 'ปกติ'})  — ใช้ "odd" = คำถามแปลกๆ, "faq" = ทดสอบ FAQ, "all" = ทั้งหมด`);
 
 for (const c of toRun) {
   const t = Date.now();

@@ -54,7 +54,7 @@ const AMBIGUOUS_PLACES: Record<string, string[]> = {
   phuket: ['Phuket Airport', 'Phuket Zone'],
 };
 
-function parseCsv(csv: string): string[][] {
+export function parseCsv(csv: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let cur = '';

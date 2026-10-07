@@ -4,6 +4,7 @@
 import { GoogleGenAI, Type } from '@google/genai';
 import type { Content } from '@google/genai';
 import { lookupPrice } from './prices';
+import { searchFaq, faqCategories } from './faq';
 import { log } from './log';
 import { buildSystemPrompt } from './prompts';
 import { detectLanguage, languageRuleFor, extractReply } from './language';
@@ -49,9 +50,13 @@ async function callModel(
   return response!;
 }
 
+/**
+ * หมายเหตุ: พารามิเตอร์ที่ 2 (_faqText) เลิกใช้แล้ว — FAQ ถูกค้นผ่าน tool search_faq (lib/faq.ts) แทนการยัดทั้งชีตใน prompt
+ * คงไว้เพื่อให้ผู้เรียกเดิม (route, scripts/chat-test.mts) ไม่ต้องแก้
+ */
 export async function generateReply(
   userMessage: string,
-  faqText: string,
+  _faqText: string,
   history: ChatMessage[] = []
 ): Promise<string> {
   const startTime = Date.now();
@@ -60,7 +65,14 @@ export async function generateReply(
   // ภาษาตอบกำหนดจากโค้ด (ดูตัวอักษรในข้อความลูกค้า) ไม่ให้ Gemini เดา
   const lang = detectLanguage(userMessage, history);
   const fallbackReply = lang === 'thai' ? DEFAULT_REPLY : DEFAULT_REPLY_EN;
-  const systemPrompt = buildSystemPrompt(faqText, fallbackReply, isFirstMessage, languageRuleFor(lang));
+  // รายชื่อหมวด FAQ (cache 60 วิ) ไว้ให้ Gemini เลือกหมวดตอนเรียก search_faq — โหลดไม่ได้ก็ไม่ล้ม (tool จะรายงาน error เอง)
+  let categories = '';
+  try {
+    categories = (await faqCategories()).join(' | ');
+  } catch (err) {
+    log.warn('faq.categories_unavailable', { err: (err as Error).message });
+  }
+  const systemPrompt = buildSystemPrompt(categories, fallbackReply, isFirstMessage, languageRuleFor(lang));
 
   // Build contents array: history turns + current user message
   const contents: Content[] = [
@@ -89,6 +101,19 @@ export async function generateReply(
             required: ['origin', 'destination', 'pax'],
           },
         },
+        {
+          name: 'search_faq',
+          description:
+            'ค้นข้อมูลทั่วไปของ CTT (บริการ นโยบาย ทัวร์ ความปลอดภัย การติดต่อ ข้อมูลกระบี่ ฯลฯ) จาก FAQ จริง คืน status: ok / weak / not_found / error พร้อมแถวที่ตรง ห้ามใช้ค้นราคารถรับส่ง (ใช้ lookup_price)',
+          parameters: {
+            type: Type.OBJECT,
+            properties: {
+              query: { type: Type.STRING, description: 'คำถามของลูกค้า เป็นภาษาไทยหรืออังกฤษ (แปลก่อนถ้าเป็นภาษาอื่น)' },
+              category: { type: Type.STRING, description: 'หมวด FAQ ที่เกี่ยวข้อง (ถ้ารู้) เลือกจากรายชื่อหมวดใน prompt' },
+            },
+            required: ['query'],
+          },
+        },
       ],
     },
   ];
@@ -106,10 +131,16 @@ export async function generateReply(
       calls.map(async (call) => {
         let result: Record<string, unknown>;
         try {
-          if (call.name !== 'lookup_price') throw new Error(`unknown tool ${call.name}`);
-          const args = (call.args ?? {}) as { origin?: string; destination?: string; pax?: number | string };
-          result = { ...(await lookupPrice(String(args.origin ?? ''), String(args.destination ?? ''), Number(args.pax))) };
-          log.info('gemini.price_lookup', { status: result.status });
+          if (call.name === 'search_faq') {
+            const a = (call.args ?? {}) as { query?: string; category?: string };
+            result = { ...(await searchFaq(String(a.query ?? ''), a.category ? String(a.category) : undefined)) };
+          } else if (call.name === 'lookup_price') {
+            const args = (call.args ?? {}) as { origin?: string; destination?: string; pax?: number | string };
+            result = { ...(await lookupPrice(String(args.origin ?? ''), String(args.destination ?? ''), Number(args.pax))) };
+            log.info('gemini.price_lookup', { status: result.status });
+          } else {
+            throw new Error(`unknown tool ${call.name}`);
+          }
         } catch (err) {
           log.error('gemini.price_lookup_failed', { err: (err as Error).message });
           // ค้นราคาไม่ได้ (Sheet ล่ม ฯลฯ) → ให้ส่งต่อแชมป์ ไม่ให้เดาราคา

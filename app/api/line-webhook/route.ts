@@ -3,7 +3,6 @@
 
 import { after } from 'next/server';
 import { Client, validateSignature, WebhookEvent } from '@line/bot-sdk';
-import { fetchFAQ } from '@/lib/sheet';
 import { generateReply, DEFAULT_REPLY, DEFAULT_REPLY_EN } from '@/lib/gemini';
 import { shouldHandoff, notifyAdmin } from '@/lib/handoff';
 import { detectLanguage } from '@/lib/language';
@@ -79,13 +78,11 @@ export async function POST(req: Request) {
           return;
         }
 
-        const [faqText, history] = await Promise.all([
-          fetchFAQ(),
-          getHistory(userId),
-        ]);
+        // FAQ ไม่ถูกดึงทั้งชีตมาใส่ prompt แล้ว — Gemini ค้นเฉพาะแถวที่ต้องใช้ผ่าน tool search_faq (lib/faq.ts)
+        const history = await getHistory(userId);
 
         const rawReply = await Promise.race([
-          generateReply(userMessage, faqText, history),
+          generateReply(userMessage, '', history),
           new Promise<string>((_, reject) =>
             setTimeout(() => reject(new Error('gemini_timeout')), 18000)
           ),
