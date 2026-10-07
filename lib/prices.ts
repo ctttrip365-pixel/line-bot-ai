@@ -13,6 +13,7 @@ const DEFAULT_PRICE_SHEET_ID = '1sqITrRjl6vvm1NZy9KkmNZOgj2knoVuS4xNBkwY35YQ';
 const CACHE_TTL_MS = 60_000;
 const FETCH_TIMEOUT_MS = 5000;
 const MAX_PAX_FOR_PRICE = 8;
+const ALLOW_REVERSE_PRICE = true;
 
 interface PriceRow {
   from: string; // zone name (ตามที่เขียนใน Sheet)
@@ -29,6 +30,7 @@ interface PriceData {
   rowIndex: Map<string, PriceRow>; // key = norm(from)|norm(to)
   aliases: Map<string, string[]>; // norm(name) → zone(s) ชื่อเดียวมีได้หลาย zone เรียงตามลำดับแถวใน Sheet (เจาะจงก่อน กว้างทีหลัง)
   zoneNames: Map<string, string>; // norm(zone) → zone (ชื่อ zone จริงจากคอลัมน์ from/to)
+  byFrom: Map<string, PriceRow[]>; // norm(from_zone) → ทุกปลายทางที่มีราคาจากต้นทางนี้ (ใช้ทำตารางราคา)
 }
 
 let cache: { data: PriceData; expiresAt: number } | null = null;
@@ -114,6 +116,7 @@ function buildData(priceRows: string[][], aliasRows: string[][]): PriceData {
   const rows: PriceRow[] = [];
   const rowIndex = new Map<string, PriceRow>();
   const zoneNames = new Map<string, string>();
+  const byFrom = new Map<string, PriceRow[]>();
 
   for (const r of priceRows.slice(1)) {
     const [from, to, p13, p48, note, active, l13, l48] = r.map((c) => (c ?? '').trim());
@@ -125,8 +128,31 @@ function buildData(priceRows: string[][], aliasRows: string[][]): PriceData {
     const row: PriceRow = { from, to, price13, price48, note: note ?? '', link13: safePaymentLink(l13), link48: safePaymentLink(l48) };
     rows.push(row);
     rowIndex.set(`${norm(from)}|${norm(to)}`, row);
+    const fromList = byFrom.get(norm(from)) ?? [];
+    fromList.push(row);
+    byFrom.set(norm(from), fromList);
     zoneNames.set(norm(from), from);
     zoneNames.set(norm(to), to);
+  }
+
+  // ชีตเก็บราคารายทิศ แต่หัวชีตระบุว่า "ราคาใช้ได้ทั้งขาไปและขากลับ" — ถ้าทิศหนึ่งไม่มีแถว ให้ใช้ราคาของทิศตรงข้าม
+  // แถวที่มีทั้งสองทิศ (ราคาต่างกันได้ เช่น Patong → สนามบิน) ใช้ตามแถวจริงเสมอ ไม่ถูกทับ
+  // ปิดได้ด้วย ALLOW_REVERSE_PRICE=false (กฎ "ห้ามเดาราคา": เส้นที่ไม่มีแถวเลยทั้งสองทิศยังคง not_found)
+  if (ALLOW_REVERSE_PRICE) {
+    for (const row of rows.slice()) {
+      const rk = `${norm(row.to)}|${norm(row.from)}`;
+      if (rowIndex.has(rk)) continue;
+      // แถวที่ชีตระบุ "เส้นเฉพาะ" (เช่น Patong → สนามบิน จากแท็บ อื่นๆ) ไม่สร้างขากลับ: ไม่เช่นนั้น สนามบิน → Patong จะกลายเป็นราคาเส้นเฉพาะ
+      // ทั้งที่ราคาจริงคือราคาโซนภูเก็ตของสนามบิน (ป่าตอง/กะตะ/กะรน/กมลา)
+      if (/เส้นเฉพาะ/.test(row.note)) continue;
+      const rev: PriceRow = { ...row, from: row.to, to: row.from, note: row.note || 'ใช้ราคาขากลับของเส้นเดิม' };
+      rows.push(rev);
+      rowIndex.set(rk, rev);
+      zoneNames.set(norm(rev.from), rev.from);
+      const lst = byFrom.get(norm(rev.from)) ?? [];
+      lst.push(rev);
+      byFrom.set(norm(rev.from), lst);
+    }
   }
 
   const aliases = new Map<string, string[]>();
@@ -139,7 +165,7 @@ function buildData(priceRows: string[][], aliasRows: string[][]): PriceData {
     aliases.set(key, list);
   }
 
-  return { rows, rowIndex, aliases, zoneNames };
+  return { rows, rowIndex, aliases, zoneNames, byFrom };
 }
 
 export async function loadPrices(): Promise<PriceData> {
@@ -239,4 +265,112 @@ export async function lookupPrice(origin: string, destination: string, pax: numb
         ? 'ไม่รู้จักสถานที่นี้ ให้ถามลูกค้าว่าอยู่ย่านไหน (เช่น อ่าวนาง ภูเก็ต เขาหลัก) ถ้ายังไม่ทราบให้แจ้งว่าพี่แชมป์จะเช็คราคาให้'
         : 'ยังไม่มีราคาเส้นทางนี้ในตาราง ห้ามเดาราคา ให้แจ้งว่าพี่แชมป์จะเช็คราคาให้และส่งต่อแชมป์',
   };
+}
+
+// ============================================================
+// ตารางราคาทุกปลายทางจากต้นทางเดียว (ส่งให้ลูกค้าดูเมื่อรู้ต้นทางแล้ว ไม่ต้องจับชื่อปลายทางให้ตรง)
+// สร้างโดยโค้ด ไม่ให้ Gemini พิมพ์ตัวเลขเอง — ตัวเลขมาจากชีต Prices ปัจจุบันเสมอ
+// ============================================================
+
+type Lang = 'thai' | 'english' | 'other';
+
+// ชื่อที่แสดงให้ลูกค้า (ไทย/อังกฤษ) และกลุ่ม — zone ที่ไม่อยู่ในรายการนี้จะแสดงตามชื่อในชีต ในกลุ่ม "อื่นๆ"
+// เพิ่ม zone ใหม่ในชีตแล้วยังใช้ได้ทันที (แค่ชื่อแสดงเป็นอังกฤษจนกว่าจะเพิ่มที่นี่)
+const ZONE_LABELS: Record<string, { th: string; en: string; group: 0 | 1 | 2 }> = {
+  'Krabi Airport': { th: 'สนามบินกระบี่', en: 'Krabi Airport', group: 0 },
+  'Krabi Town': { th: 'เมืองกระบี่', en: 'Krabi Town', group: 0 },
+  'Ao Nang': { th: 'อ่าวนาง', en: 'Ao Nang', group: 0 },
+  'Klong Muang': { th: 'คลองม่วง', en: 'Klong Muang', group: 0 },
+  Tubkaek: { th: 'ทับแขก', en: 'Tubkaek', group: 0 },
+  'Ao Nam Mao': { th: 'อ่าวน้ำเมา', en: 'Ao Nam Mao', group: 0 },
+  'Railay Pier': { th: 'ท่าเรือไร่เลย์', en: 'Railay Pier', group: 0 },
+  'Thalane Pier': { th: 'ท่าเลน (เกาะยาว)', en: 'Thalane Pier (Koh Yao)', group: 0 },
+  'Phuket Airport': { th: 'สนามบินภูเก็ต', en: 'Phuket Airport', group: 1 },
+  'Phuket Zone': { th: 'ภูเก็ต: ป่าตอง/กะตะ/กะรน/กมลา', en: 'Phuket: Patong/Kata/Karon/Kamala', group: 1 },
+  Patong: { th: 'ป่าตอง', en: 'Patong', group: 1 },
+  'Phuket Town': { th: 'ภูเก็ตทาวน์', en: 'Phuket Town', group: 1 },
+  Rawai: { th: 'ราไวย์', en: 'Rawai', group: 1 },
+  'Nai Harn': { th: 'ในหาน', en: 'Nai Harn', group: 1 },
+  'Khao Lak': { th: 'เขาหลัก', en: 'Khao Lak', group: 1 },
+  'Khao Sok': { th: 'เขาสก', en: 'Khao Sok', group: 1 },
+  'Phang Nga Town': { th: 'ตัวเมืองพังงา', en: 'Phang Nga Town', group: 1 },
+  'Koh Lanta': { th: 'เกาะลันตา', en: 'Koh Lanta', group: 2 },
+  Trang: { th: 'ตรัง', en: 'Trang', group: 2 },
+  'Surat Town': { th: 'สุราษฎร์ธานี (ตัวเมือง)', en: 'Surat Thani Town', group: 2 },
+  'Surat Train Station': { th: 'สถานีรถไฟสุราษฎร์ธานี (พุนพิน)', en: 'Surat Thani Train Station', group: 2 },
+  'Donsak Pier': { th: 'ท่าเรือดอนสัก', en: 'Donsak Pier', group: 2 },
+  'Hat Yai': { th: 'หาดใหญ่', en: 'Hat Yai', group: 2 },
+};
+
+const GROUP_TITLES: Record<Lang, [string, string, string]> = {
+  thai: ['ในจังหวัดกระบี่', 'ภูเก็ต / พังงา', 'จังหวัดอื่น'],
+  english: ['Within Krabi', 'Phuket / Phang Nga', 'Other provinces'],
+  other: ['Within Krabi', 'Phuket / Phang Nga', 'Other provinces'],
+};
+
+const fmt = (n: number) => n.toLocaleString('en-US');
+
+export type PriceMenuResult =
+  | { status: 'ok'; originZone: string; destinations: string[]; text: string }
+  | { status: 'not_found' };
+
+/**
+ * ตารางราคาทุกปลายทางจากต้นทางที่ลูกค้าบอก (ชื่อสถานที่/โรงแรมใดๆ ก็ได้ ระบบแปลงเป็นโซนเอง)
+ * pax: ถ้ารู้จำนวนคน (1-8) แสดงราคาช่วงนั้นช่วงเดียว ไม่งั้นแสดงทั้ง 1-3 / 4-8 คน
+ * ท้ายตารางมีคำถามปลายทาง + เสนอทัวร์วันเดย์ (ไม่ใส่ราคาทัวร์ ราคาทัวร์ให้ตอบจาก FAQ เมื่อลูกค้าสนใจ)
+ */
+export async function priceMenu(origin: string, lang: Lang, pax?: number): Promise<PriceMenuResult> {
+  const data = await loadPrices();
+  let zone = '';
+  let rows: PriceRow[] = [];
+  for (const z of candidateZones(origin, data)) {
+    const list = data.byFrom.get(norm(z));
+    if (list && list.length > 0) {
+      zone = z;
+      rows = list;
+      break;
+    }
+  }
+  if (rows.length === 0) return { status: 'not_found' };
+
+  const thai = lang === 'thai';
+  const small = pax !== undefined && Number.isFinite(pax) && pax >= 1 && pax <= MAX_PAX_FOR_PRICE ? pax <= 3 : undefined; // undefined = ไม่รู้จำนวนคน
+  const label = (z: string) => ZONE_LABELS[z]?.[thai ? 'th' : 'en'] ?? z;
+  const originLabel = label(zone);
+
+  const groups: PriceRow[][] = [[], [], []];
+  for (const r of rows) groups[ZONE_LABELS[r.to]?.group ?? 2].push(r);
+  const titles = GROUP_TITLES[lang];
+
+  const lines: string[] = [];
+  lines.push(
+    thai
+      ? `🚐 ราคารถรับ-ส่งจาก ${originLabel} (ต่อรถตู้ 1 คัน รวมน้ำมัน ไม่มีค่าใช้จ่ายเพิ่ม)`
+      : `🚐 Van transfer prices from ${originLabel} (per van, fuel included, no extra charges)`
+  );
+  if (small === undefined) lines.push(thai ? 'ราคาแสดงเป็น: 1-3 คน / 4-8 คน (บาท)' : 'Prices shown as: 1-3 people / 4-8 people (THB)');
+  else lines.push(thai ? `สำหรับ ${pax} คน (บาท)` : `For ${pax} people (THB)`);
+
+  groups.forEach((g, i) => {
+    if (g.length === 0) return;
+    g.sort((a, b) => a.price13 - b.price13 || label(a.to).localeCompare(label(b.to)));
+    lines.push('', titles[i]);
+    for (const r of g) {
+      const price = small === undefined ? `${fmt(r.price13)} / ${fmt(r.price48)}` : fmt(small ? r.price13 : r.price48);
+      lines.push(`• ${label(r.to)} — ${price}`);
+    }
+  });
+
+  lines.push(
+    '',
+    thai
+      ? 'ต้องการไปที่ไหน แจ้งชื่อสถานที่หรือโรงแรมได้เลยครับ (ถ้าไม่มีในรายการ พี่แชมป์จะเช็คราคาให้)'
+      : 'Where would you like to go? Just tell us the place or hotel name (if it is not listed, we will check the price for you).',
+    '',
+    thai
+      ? '🏝️ นอกจากรถรับ-ส่ง CTT ยังมีทัวร์วันเดย์ด้วยนะครับ เช่น ทัวร์ 4 เกาะ เกาะพีพี เกาะห้อง สนใจให้ส่งรายละเอียดและราคาไหมครับ?'
+      : '🏝️ Besides transfers, we also offer day tours — e.g. 4-Island, Phi Phi Island and Hong Island. Would you like the details and prices?'
+  );
+
+  return { status: 'ok', originZone: zone, destinations: rows.map((r) => label(r.to)), text: lines.join('\n') };
 }

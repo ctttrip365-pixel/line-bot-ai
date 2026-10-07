@@ -3,7 +3,7 @@
 
 import { GoogleGenAI, Type } from '@google/genai';
 import type { Content } from '@google/genai';
-import { lookupPrice } from './prices';
+import { lookupPrice, priceMenu } from './prices';
 import { searchFaq, faqCategories } from './faq';
 import { log } from './log';
 import { buildSystemPrompt } from './prompts';
@@ -118,6 +118,19 @@ export async function generateReply(
           },
         },
         {
+          name: 'list_prices_from',
+          description:
+            'รู้จุดรับแล้ว แต่ยังไม่รู้จุดส่ง (หรือจุดส่งไม่ชัด/ไม่มีราคา) → เรียกตัวนี้ ระบบจะแนบตารางราคาทุกปลายทางจากจุดรับนั้นให้ลูกค้าเอง พร้อมคำถามปลายทางและข้อเสนอทัวร์วันเดย์',
+          parameters: {
+            type: Type.OBJECT,
+            properties: {
+              origin: { type: Type.STRING, description: 'จุดรับ ตามที่ลูกค้าพิมพ์ เช่น สนามบินกระบี่, Avani Krabi (แปลเป็นไทย/อังกฤษก่อนถ้าเป็นภาษาอื่น)' },
+              pax: { type: Type.INTEGER, description: 'จำนวนผู้โดยสาร ถ้ารู้แล้ว (ไม่ระบุถ้ายังไม่รู้)' },
+            },
+            required: ['origin'],
+          },
+        },
+        {
           name: 'search_faq',
           description:
             'ค้นข้อมูลทั่วไปของ CTT (บริการ นโยบาย ทัวร์ ความปลอดภัย การติดต่อ ข้อมูลกระบี่ ฯลฯ) จาก FAQ จริง คืน status: ok / weak / not_found / error พร้อมแถวที่ตรง ห้ามใช้ค้นราคารถรับส่ง (ใช้ lookup_price)',
@@ -133,6 +146,11 @@ export async function generateReply(
       ],
     },
   ];
+
+  // ตารางราคาจากโค้ด (ไม่ผ่าน Gemini): ถ้ามี จะแนบต่อท้ายคำตอบเสมอ — Gemini เขียนแค่ประโยคนำสั้นๆ
+  let menuText = '';
+  const MENU_NOTE =
+    'ระบบจะแนบตารางราคาทุกปลายทาง (พร้อมคำถามปลายทางและข้อเสนอทัวร์วันเดย์) ให้ลูกค้าท้ายคำตอบเอง — เขียนเฉพาะประโยคนำสั้นๆ 1 ประโยค (เช่น "ราคาจากสนามบินกระบี่ตามนี้ครับ") ห้ามพิมพ์ราคาหรือรายการเส้นทางเอง ห้ามถามปลายทางซ้ำ ห้ามเสนอทัวร์เอง';
 
   const MAX_TOOL_ROUNDS = 3;
   let response = await callModel(ai, contents, systemPrompt, tools);
@@ -150,10 +168,31 @@ export async function generateReply(
           if (call.name === 'search_faq') {
             const a = (call.args ?? {}) as { query?: string; category?: string };
             result = { ...(await searchFaq(String(a.query ?? ''), a.category ? String(a.category) : undefined)) };
+          } else if (call.name === 'list_prices_from') {
+            const a = (call.args ?? {}) as { origin?: string; pax?: number | string };
+            const paxN = a.pax !== undefined && a.pax !== null && String(a.pax) !== '' ? Number(a.pax) : undefined;
+            const m = await priceMenu(String(a.origin ?? ''), lang, paxN);
+            if (m.status === 'ok') {
+              menuText = m.text;
+              result = { status: 'menu_ready', origin_zone: m.originZone, destination_count: m.destinations.length, message: MENU_NOTE };
+            } else {
+              result = { status: 'not_found', message: 'ไม่รู้จักจุดรับนี้ ให้ถามลูกค้าว่าจุดรับอยู่ย่านไหน ถ้ายังไม่ทราบแจ้งว่าพี่แชมป์จะเช็คให้ และใส่ [HANDOFF]' };
+            }
+            log.info('gemini.price_menu', { status: m.status });
           } else if (call.name === 'lookup_price') {
             const args = (call.args ?? {}) as { origin?: string; destination?: string; pax?: number | string };
             result = { ...(await lookupPrice(String(args.origin ?? ''), String(args.destination ?? ''), Number(args.pax))) };
             log.info('gemini.price_lookup', { status: result.status });
+            // รู้ต้นทางแต่จับปลายทางไม่ได้/กำกวม → ส่งตารางราคาทุกปลายทางจากต้นทางนั้นแทน (ลดปัญหาจับชื่อปลายทางไม่ตรง)
+            if (result.status === 'not_found' || result.status === 'ambiguous') {
+              const paxN = Number(args.pax);
+              const m = await priceMenu(String(args.origin ?? ''), lang, Number.isFinite(paxN) ? paxN : undefined);
+              if (m.status === 'ok') {
+                menuText = m.text;
+                result = { status: 'menu_ready', reason: result.status, origin_zone: m.originZone, destination_count: m.destinations.length, message: MENU_NOTE };
+                log.info('gemini.price_menu', { status: 'fallback_from_lookup' });
+              }
+            }
           } else {
             throw new Error(`unknown tool ${call.name}`);
           }
@@ -203,12 +242,17 @@ export async function generateReply(
 
   // ดึงเฉพาะข้อความใน <reply> (ทิ้ง "THINK ..." ที่หลุดมา) ถ้าโมเดลเขียนความคิดล้วนๆ → ใช้ข้อความ fallback
   const raw = response.text?.trim();
-  if (!raw) throw new Error('gemini_empty_response');
+  if (!raw) {
+    // Gemini เงียบหลังเรียก tool แต่ตารางราคาพร้อมแล้ว → ส่งตารางพร้อมประโยคนำสำเร็จรูป ไม่ทิ้งลูกค้า
+    if (menuText) return `${lang === 'thai' ? 'ราคารถรับ-ส่งตามนี้ครับ' : 'Here are our transfer prices:'}\n\n${menuText}`;
+    throw new Error('gemini_empty_response');
+  }
   const reply = extractReply(raw);
   if (!reply) {
     log.warn('gemini.reply_unusable', { lang, startsWith: raw.slice(0, 20) });
+    if (menuText) return `${lang === 'thai' ? 'ราคารถรับ-ส่งตามนี้ครับ' : 'Here are our transfer prices:'}\n\n${menuText}`;
     throw new Error('gemini_unusable_reply');
   }
 
-  return reply;
+  return menuText ? `${reply}\n\n${menuText}` : reply;
 }
