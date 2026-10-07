@@ -10,7 +10,7 @@
     },
     {
       "path": "/api/dispatch/refresh-day-status",
-      "schedule": "0 23 * * *"
+      "schedule": "0 2 * * *"
     }
   ]
 }

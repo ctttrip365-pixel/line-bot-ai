@@ -7,6 +7,7 @@
 
 import { cacheDayStatusMap } from '@/lib/day-status';
 import { buildAndWriteMonthGrid } from '@/lib/driver-grid';
+import { alertUnassignedSoon } from '@/lib/unassigned-alert';
 import { log } from '@/lib/log';
 
 export const runtime = 'nodejs';
@@ -31,6 +32,14 @@ export async function GET(req: Request) {
     await buildAndWriteMonthGrid(month);
   }
 
-  log.info('refresh_day_status.done', { months });
-  return new Response(JSON.stringify({ ok: true, months }), { status: 200 });
+  // ตัวเดียวกันนี้รันเวลา ~09:00 ไทย → สรุปงานที่ยังไม่มีคนขับและเหลือไม่เกิน 2 วัน (ไม่ทำให้การรีเฟรชข้างบนล้มถ้าขั้นนี้พัง)
+  let alert: { sent: boolean; count: number } | null = null;
+  try {
+    alert = await alertUnassignedSoon();
+  } catch (err) {
+    log.error('unassigned_alert.failed', { err: (err as Error).message });
+  }
+
+  log.info('refresh_day_status.done', { months, alert });
+  return new Response(JSON.stringify({ ok: true, months, alert }), { status: 200 });
 }

@@ -54,6 +54,16 @@ function getRedis(): Redis {
 // รอบ cron (ทุก 30 นาที) กับรอบ instant (ทันทีที่คนขับส่งวันว่าง) มีโอกาสชนกันในหน้าต่างสั้นๆ —
 // ล็อกกันเสนอ booking เดียวกันซ้ำสอง (สอง proposed row / สองการ์ด Telegram)
 const PROPOSE_LOCK_TTL_SECONDS = 60;
+const URGENT_NO_MATCH_HOURS = 24;
+
+/** งานเริ่มภายใน N ชั่วโมงข้างหน้า (เวลาไทย) หรือเลยเวลาเริ่มไปแล้วแต่ยังไม่ผ่านไปเกิน 6 ชม. */
+export function startsWithinHours(jobDate: string, jobStartTime: string | undefined, hours: number): boolean {
+  const [h, m] = (jobStartTime || '00:00').split(':');
+  const start = new Date(`${jobDate}T${h.padStart(2, '0')}:${(m ?? '00').padStart(2, '0')}:00+07:00`).getTime();
+  if (!Number.isFinite(start)) return true; // อ่านเวลาไม่ได้ → ถือว่าด่วน แจ้งไว้ก่อนดีกว่าเงียบ
+  const diffH = (start - Date.now()) / 3600000;
+  return diffH <= hours && diffH >= -6;
+}
 // กัน Telegram สแปมซ้ำถ้ายังหาคนขับไม่ได้ต่อเนื่องหลายรอบ (เช่น instant trigger ยิงถี่ตอนหลายคน
 // ส่งวันว่างใกล้ๆ กัน แต่ booking นี้ก็ยังไม่มีใครว่างเหมือนเดิม)
 const NO_MATCH_ALERT_TTL_SECONDS = 12 * 60 * 60;
@@ -65,6 +75,13 @@ export async function processDispatchProposals(proposals: Proposal[]): Promise<v
 
   for (const p of proposals) {
     if (p.noMatch) {
+      // แชมป์สั่ง (2026-10-07): งานที่ยังไม่มีคนขับว่าง ไม่ต้องแจ้ง Telegram อัตโนมัติทันที
+      // แจ้งสรุปตอน ~09:00 เมื่อเหลือไม่เกิน 2 วัน (lib/unassigned-alert.ts) ยกเว้นงานด่วนที่เริ่มภายใน 24 ชม. ข้างหน้า
+      // (ไม่งั้นงานที่เพิ่งเข้ามาตอนเย็นสำหรับเช้าวันรุ่งขึ้นจะไม่มีใครรู้ทัน)
+      if (!startsWithinHours(p.jobDate, p.jobStartTime, URGENT_NO_MATCH_HOURS)) {
+        log.info('dispatch_propose.no_match_deferred', { bookingEventId: p.bookingEventId, jobDate: p.jobDate });
+        continue;
+      }
       const alertKey = `dispatch_no_match_alerted:${p.bookingEventId}`;
       let alreadyAlerted = false;
       try {

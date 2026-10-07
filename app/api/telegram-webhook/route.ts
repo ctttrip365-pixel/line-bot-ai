@@ -26,10 +26,11 @@ async function invalidateJobsCacheForVisibleMonths(): Promise<void> {
 async function sendJobsList(): Promise<void> {
   const [assignments, drivers] = await Promise.all([listAssignments(), listDrivers()]);
   const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10); // วันที่ไทย
+  const horizon = new Date(Date.now() + 7 * 3600 * 1000 + 60 * 24 * 3600 * 1000).toISOString().slice(0, 10); // 2 เดือนข้างหน้า
   const jobs = assignments
-    .filter((a) => (a.status === 'confirmed' || a.status === 'notified') && a.job_date >= today)
+    .filter((a) => (a.status === 'confirmed' || a.status === 'notified') && a.job_date >= today && a.job_date <= horizon)
     .sort((a, b) => (a.job_date + a.job_start_time).localeCompare(b.job_date + b.job_start_time))
-    .slice(0, 20);
+    .slice(0, 50);
 
   if (jobs.length === 0) {
     await sendTelegramMessage('ตอนนี้ไม่มีงานที่ลงคนขับไว้ (ตั้งแต่วันนี้เป็นต้นไป) ครับ');
@@ -51,7 +52,16 @@ async function sendJobsList(): Promise<void> {
   const buttons = jobs.map((j, i) => [
     { text: `❌ ยกเลิก #${i + 1} ${j.job_date.slice(5)} ${j.job_start_time} ${driverName(j.driver_id)}`, callback_data: `unassign_ask:${j.booking_event_id}` },
   ]);
-  await sendTelegramMessage(['📋 <b>งานที่ลงคนขับแล้ว</b>', '', ...lines].join('\n'), buttons);
+  // Telegram จำกัด 4,096 ตัวอักษร/ข้อความ → แบ่งส่งทีละ 10 งาน (แต่ละก้อนมีปุ่มของตัวเอง)
+  const CHUNK = 10;
+  const total = Math.ceil(jobs.length / CHUNK);
+  for (let i = 0; i < jobs.length; i += CHUNK) {
+    const n = i / CHUNK + 1;
+    await sendTelegramMessage(
+      [`📋 <b>งานที่ลงคนขับแล้ว (${jobs.length} งาน ภายใน 2 เดือน)</b>${total > 1 ? ` — ชุด ${n}/${total}` : ''}`, '', ...lines.slice(i, i + CHUNK)].join('\n'),
+      buttons.slice(i, i + CHUNK)
+    );
+  }
 }
 
 export async function POST(req: Request) {
