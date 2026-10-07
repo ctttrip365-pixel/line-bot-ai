@@ -37,7 +37,15 @@ async function callModel(
       model: MODEL,
       contents,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      config: { systemInstruction: systemPrompt, temperature: 0.6, maxOutputTokens: 1024, tools: tools as any },
+      config: {
+        systemInstruction: systemPrompt,
+        temperature: 0.6,
+        // โทเค็น "คิด" นับรวมในโควตาเอาต์พุต: เคยใช้ไป 980 จาก 1,024 เหลือเขียนคำตอบ 40 → MAX_TOKENS (ทดสอบ 2026-10-07)
+        // จำกัดงบคิดไว้ 256 และขยายเพดานเป็น 2048
+        thinkingConfig: { thinkingBudget: 256 },
+        maxOutputTokens: 2048,
+        tools: tools as any,
+      },
     });
     const hasOutput = (response.functionCalls?.length ?? 0) > 0 || !!response.text?.trim();
     if (hasOutput) return response;
@@ -150,7 +158,7 @@ export async function generateReply(
   // ตารางราคาจากโค้ด (ไม่ผ่าน Gemini): ถ้ามี จะแนบต่อท้ายคำตอบเสมอ — Gemini เขียนแค่ประโยคนำสั้นๆ
   let menuText = '';
   const MENU_NOTE =
-    'ระบบจะแนบตารางราคาทุกปลายทาง (พร้อมคำถามปลายทางและข้อเสนอทัวร์วันเดย์) ให้ลูกค้าท้ายคำตอบเอง — เขียนเฉพาะประโยคนำสั้นๆ 1 ประโยค (เช่น "ราคาจากสนามบินกระบี่ตามนี้ครับ") ห้ามพิมพ์ราคาหรือรายการเส้นทางเอง ห้ามถามปลายทางซ้ำ ห้ามเสนอทัวร์เอง';
+    'ข้อมูลสำหรับคุณเท่านั้น (ห้ามเอ่ยถึงลูกค้า): ตารางราคาถูกแนบให้ลูกค้าแล้ว — เขียนเฉพาะประโยคนำสั้นๆ 1 ประโยค เช่น "ราคารถรับ-ส่งจากสนามบินกระบี่ตามนี้ครับ" ห้ามพิมพ์ราคาหรือรายการเส้นทางเอง ห้ามถามปลายทาง/จำนวนคนซ้ำ ห้ามเสนอทัวร์เอง ห้ามพูดถึงระบบหรือตาราง';
 
   const MAX_TOOL_ROUNDS = 3;
   let response = await callModel(ai, contents, systemPrompt, tools);

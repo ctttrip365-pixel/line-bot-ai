@@ -44,6 +44,8 @@ export function languageRuleFor(lang: Lang): string {
 export function cleanReplyText(s: string): string {
   return s
     .replace(/<\/?reply>/gi, '')
+    // กันข้อความอธิบายการทำงานภายในหลุดถึงลูกค้า เช่น "(ระบบจะแสดงตารางราคาให้ลูกค้าเอง)" "(the system will attach ...)"
+    .replace(/[(（][^()（）]{0,80}(ระบบจะ|ระบบแนบ|the system will|system will attach)[^()（）]{0,120}[)）]/gi, '')
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/p>\s*<p[^>]*>/gi, '\n\n')
     .replace(/<\/?(p|strong|b|em|i|u|ul|ol|li|div|span)(\s[^>]*)?>/gi, '')
