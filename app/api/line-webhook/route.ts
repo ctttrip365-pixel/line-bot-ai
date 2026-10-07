@@ -97,6 +97,21 @@ export async function POST(req: Request) {
         const booking = parseBookingConfirmation(rawReply, userId);
         let finalReply = cleanReply(rawReply);
 
+        // Gemini พิมพ์ block จองแต่ข้อมูลไม่ครบ (เช่น ไม่มีวันที่) → อ่านไม่ได้ จึงไม่มีลิงก์ชำระเงิน
+        // ลบ block ที่เสียออก แล้วขอข้อมูลที่ขาดแทน ไม่ปล่อยให้ลูกค้ารอลิงก์ที่ไม่มีวันมา
+        if (!booking && rawReply.includes('[BOOKING_CONFIRMED]')) {
+          log.warn('booking.incomplete_block', { userId });
+          finalReply = finalReply
+            .replace(/\[BOOKING_CONFIRMED\][\s\S]*?(\[\/BOOKING_CONFIRMED\]|$)/g, '')
+            .trim();
+          finalReply = [
+            finalReply,
+            '',
+            'รบกวนแจ้งวันที่ เวลารับ จุดรับ จุดส่ง และจำนวนคนให้ครบอีกครั้งนะครับ 🙏',
+            'Please send the date, pick-up time, pick-up/drop-off places and number of passengers.',
+          ].join('\n').trim();
+        }
+
         if (booking) {
           log.info('booking.confirmed', {
             userId, date: booking.date, time: booking.time,
