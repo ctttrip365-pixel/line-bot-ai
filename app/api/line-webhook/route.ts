@@ -11,7 +11,7 @@ import { createCheckoutSession } from '@/lib/stripe';
 import { lookupPrice } from '@/lib/prices';
 import { newBookingRef, savePendingBooking } from '@/lib/bookings';
 import { getHistory, appendHistory } from '@/lib/history';
-import { findDriverByLineId } from '@/lib/drivers';
+import { findDriverByLineId, driverRosterUnavailable } from '@/lib/drivers';
 import { handleDriverMessage, handleDriverPostback } from '@/lib/driver-flow';
 import { log } from '@/lib/log';
 
@@ -61,6 +61,14 @@ export async function POST(req: Request) {
       const driver = await findDriverByLineId(userId);
       if (driver) {
         await handleDriverMessage(driver, userMessage, event.replyToken!);
+        return;
+      }
+
+      // อ่านรายชื่อคนขับไม่ได้เลย (Apps Script ล่ม/ช้า และไม่มีสำเนา) ทั้งที่ข้อความมีคำสั่งของคนขับ → อย่าส่งเข้าบอทลูกค้า
+      // (เคยเกิด 2026-10-07: แชมป์พิมพ์ "วันว่าง" แล้วได้ข้อความ "ขอเวลาเช็ค" ของลูกค้า) ให้บอกให้ส่งใหม่แทน
+      if (driverRosterUnavailable() && /วันว่าง|เช็คงาน|ขอลา/.test(userMessage)) {
+        log.warn('driver.roster_unavailable_keyword', { userId });
+        await replyWithRetry(event.replyToken!, 'ระบบกำลังโหลดข้อมูลคนขับ ขอเวลาสักครู่ แล้วส่งข้อความนี้อีกครั้งนะครับ 🙏', 3);
         return;
       }
 
