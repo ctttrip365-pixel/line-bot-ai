@@ -40,6 +40,17 @@ export function languageRuleFor(lang: Lang): string {
   }
 }
 
+/** ล้างแท็กที่โมเดลหลุดใส่มา: <reply> ตกค้าง และ HTML (<p> <br/> ฯลฯ) ซึ่งใน LINE จะโชว์เป็นตัวอักษรจริง */
+export function cleanReplyText(s: string): string {
+  return s
+    .replace(/<\/?reply>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>\s*<p[^>]*>/gi, '\n\n')
+    .replace(/<\/?(p|strong|b|em|i|u|ul|ol|li|div|span)(\s[^>]*)?>/gi, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 const MARKERS = [/\[BOOKING_CONFIRMED\][\s\S]*?\[\/BOOKING_CONFIRMED\]/, /\[HANDOFF\]/];
 
 /**
@@ -59,9 +70,9 @@ export function extractReply(raw: string): string | null {
       const found = text.match(m);
       if (found && !m.test(reply)) reply += `\n${found[0]}`;
     }
-    return reply || null;
+    return cleanReplyText(reply) || null;
   }
 
   if (/^\s*THINK\b/i.test(text)) return null;
-  return text || null;
+  return cleanReplyText(text) || null;
 }
