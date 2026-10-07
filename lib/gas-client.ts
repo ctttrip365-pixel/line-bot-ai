@@ -70,7 +70,10 @@ export function listCalendarEvents(fromIso: string, toIso: string, calendarId?: 
 // เป็น booking เพราะมีคำว่า "WOA" อยู่ในชื่อ event ทำให้ dispatch-match เสนอ/เตือนหาคนขับให้งานที่ไม่มีจริง
 // ตัด "ctt" ออกจากรายการด้วย (เสี่ยงชนกับ event อื่นๆ ที่พูดถึงชื่อธุรกิจเฉยๆ ยิ่งกว่า woa/vtl อีก
 // ไม่เคยมีบุ๊คกิ้งจริงใช้รหัส "CTT" นำหน้าเลย)
-const BOOKING_PATTERNS: RegExp[] = [/booking no:/i, /\b(vtl|woa)\d+/i, /day trip/i];
+// งานที่ลูกค้าจองผ่านบอท LINE + จ่ายเงินเอง: ชื่อเดิมจาก Apps Script คือ "[CTT] จุดรับ → จุดส่ง | N Pax"
+// (ไม่มี Booking No) และชื่อใหม่ขึ้นต้นด้วยรหัส "CTT-yymmdd-xxxx" — ต้องนับเป็น booking ให้ dispatch เห็น
+// ใช้ ^ ผูกกับต้นชื่อ event เท่านั้น กันชนกับ event ธุรการที่แค่พูดถึงคำว่า CTT (ดูหมายเหตุด้านบน)
+const BOOKING_PATTERNS: RegExp[] = [/booking no:/i, /\b(vtl|woa)\d+/i, /day trip/i, /^\[ctt\]/i, /^ctt-\d{6}-[a-z0-9]+/i];
 
 /** ใช้เช็คว่า Calendar event นี้คือ "งานจริงที่ต้องมีคนขับ" ไม่ใช่ OFF/reminder/event อื่นที่อยู่ปฏิทินเดียวกัน */
 export function isBookingEvent(ev: CalendarEventSummary): boolean {

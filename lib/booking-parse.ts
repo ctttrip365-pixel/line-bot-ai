@@ -20,14 +20,25 @@ function extract(description: string, label: string): string {
 }
 
 export function parseBookingDescription(description: string): ParsedBooking {
-  return {
+  const parsed: ParsedBooking = {
     guest: extract(description, 'Guest'),
     from: extract(description, 'From'),
     to: extract(description, 'To'),
     pax: extract(description, 'Pax'),
     contact: extract(description, 'Contact'),
-    pickupTime:
-      extract(description, 'Boat/Flight time') || extract(description, 'Arrive'),
+    pickupTime: extract(description, 'Boat/Flight time') || extract(description, 'Arrive'),
     bookingNo: extract(description, 'Booking No'),
   };
+
+  // งานที่บอท LINE สร้างเองแบบเดิม (Apps Script handleLegacyCreate_) เขียน description เป็น
+  //   📅 วันที่: 07/10/2026 เวลา 10:00 น. / 📍 รับที่: ... / 📍 ส่งที่: ... / 👥 จำนวน: 2 คน
+  // ไม่มีป้าย Guest:/From:/To: — เติมจากป้ายแบบเดิมเท่าที่ยังว่าง ไม่ทับค่าที่อ่านได้แล้ว
+  if (description.includes('LINE Bot')) {
+    parsed.from ||= extract(description, '📍 รับที่');
+    parsed.to ||= extract(description, '📍 ส่งที่');
+    parsed.pax ||= extract(description, '👥 จำนวน');
+    parsed.pickupTime ||= description.match(/เวลา\s*(\d{1,2}:\d{2})/)?.[1] ?? '';
+    parsed.guest ||= 'ลูกค้าจอง LINE';
+  }
+  return parsed;
 }

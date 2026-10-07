@@ -9,6 +9,9 @@ export interface BookingDetails {
   pax: string;
   userId: string;
   amount?: string; // ราคา เป็นตัวเลข string เช่น "600"
+  bookingRef?: string; // CTT-yymmdd-xxxx (Payment Link) — ใช้เป็นชื่อ/Booking No ของ event
+  guestName?: string; // ชื่อที่ลูกค้ากรอกตอนจ่ายเงิน
+  phone?: string;
 }
 
 /**

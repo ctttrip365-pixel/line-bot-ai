@@ -132,7 +132,12 @@ export async function POST(req: Request) {
   });
 
   // 4. สร้าง Google Calendar event (ผ่าน Apps Script webhook)
-  const calendarOk = await createCalendarEvent(booking);
+  const calendarOk = await createCalendarEvent({
+    ...booking,
+    bookingRef: pending?.ref,
+    guestName: session.customer_details?.name ?? undefined,
+    phone: session.customer_details?.phone ?? undefined,
+  });
 
   // 5. ส่ง LINE push message แจ้งลูกค้าว่าจ่ายแล้ว + จองสมบูรณ์
   if (booking.userId && booking.userId !== 'unknown') {
