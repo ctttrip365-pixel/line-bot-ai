@@ -67,7 +67,11 @@ const THAI_MARKS = /[\u0E47-\u0E4E]/g;
 
 export function tokenize(text: string): Set<string> {
   const out = new Set<string>();
-  const s = text.toLowerCase().replace(THAI_MARKS, '');
+  // คำพ้องที่ลูกค้าใช้ต่างจากที่เขียนใน FAQ (ค้นแบบตัวอักษรแยกไม่ออกเอง) — เพิ่มได้ที่นี่เมื่อเจอคำใหม่
+  const s = text
+    .toLowerCase()
+    .replace(/จ่ายเงิน|จ่ายตังค์?|จ่ายค่า/g, 'ชำระเงิน')
+    .replace(THAI_MARKS, '');
   for (const word of s.split(SEPARATOR)) {
     if (!word) continue;
     // แยกส่วน ASCII (a-z 0-9) ออกจากส่วนที่เป็นตัวอักษรภาษาอื่น (ไทย จีน ฮีบรู ฯลฯ)

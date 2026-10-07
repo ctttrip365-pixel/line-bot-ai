@@ -72,7 +72,23 @@ export async function generateReply(
   } catch (err) {
     log.warn('faq.categories_unavailable', { err: (err as Error).message });
   }
-  const systemPrompt = buildSystemPrompt(categories, fallbackReply, isFirstMessage, languageRuleFor(lang));
+  // ค้น FAQ ล่วงหน้าจากข้อความลูกค้าทุกครั้ง แล้วแนบแถวที่เจอใน prompt — ไม่พึ่งให้ Gemini ตัดสินใจเรียก search_faq เอง
+  // (ทดสอบจริงพบว่าบางครั้งข้ามไปเลยแล้วตอบ "ช่วยไม่ได้" ทั้งที่มีคำตอบใน FAQ) ถ้าค้นไม่ได้/ไม่เจอ ก็ไม่แนบ ไม่กระทบการตอบ
+  let faqCandidates = '';
+  try {
+    const pre = await searchFaq(userMessage);
+    if (pre.status === 'ok' || pre.status === 'weak') {
+      faqCandidates = [
+        `<faq_candidates status="${pre.status}">`,
+        ...pre.results.map((r, i) => `[${i + 1}] หมวด: ${r.category}\nQ: ${r.question}\nA: ${r.answer}`),
+        `คำแนะนำ: ${pre.message}`,
+        '</faq_candidates>',
+      ].join('\n');
+    }
+  } catch (err) {
+    log.warn('faq.prefetch_failed', { err: (err as Error).message });
+  }
+  const systemPrompt = buildSystemPrompt(categories, fallbackReply, isFirstMessage, languageRuleFor(lang), faqCandidates);
 
   // Build contents array: history turns + current user message
   const contents: Content[] = [
