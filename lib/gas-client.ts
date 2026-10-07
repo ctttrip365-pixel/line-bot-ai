@@ -14,6 +14,31 @@ export interface GasResponse<T = unknown> {
   error?: string;
 }
 
+// การอ่านซ้ำได้ปลอดภัย (ไม่เปลี่ยนข้อมูล) — ลองใหม่ได้เมื่อคำขอค้าง
+// ส่วนการเขียน (append/update/create) ห้ามลองซ้ำเองเพราะคำขอแรกอาจทำงานสำเร็จไปแล้วแต่คำตอบไม่กลับมา (จะได้ข้อมูลซ้ำ)
+const IDEMPOTENT_ACTIONS = new Set(['sheet_read', 'calendar_list']);
+
+async function callGasOnce<T>(
+  webhookUrl: string,
+  action: string,
+  payload: Record<string, unknown>,
+  timeoutMs: number
+): Promise<GasResponse<T>> {
+  const res = await fetch(webhookUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, ...payload }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) {
+    log.error('gas.http_error', { action, status: res.status });
+    return { ok: false, error: `HTTP ${res.status}` };
+  }
+  const json = (await res.json()) as GasResponse<T>;
+  log.info('gas.call_ok', { action, ok: json.ok });
+  return json;
+}
+
 async function callGas<T = unknown>(action: string, payload: Record<string, unknown>): Promise<GasResponse<T>> {
   const webhookUrl = process.env.CALENDAR_WEBHOOK_URL;
   if (!webhookUrl) {
@@ -21,31 +46,21 @@ async function callGas<T = unknown>(action: string, payload: Record<string, unkn
     return { ok: false, error: 'CALENDAR_WEBHOOK_URL not set' };
   }
 
-  try {
-    const res = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, ...payload }),
-      // Apps Script web apps have real cold-start latency (observed 10-15s for
-      // a plain Sheet read) — 8s was too aggressive and made every driver-check
-      // time out, silently falling everyone through to the Gemini/customer path.
-      // 20s leaves headroom above the worst case we've seen while still leaving
-      // the Gemini call room inside the 30s function budget on a cache miss.
-      signal: AbortSignal.timeout(20000),
-    });
-
-    if (!res.ok) {
-      log.error('gas.http_error', { action, status: res.status });
-      return { ok: false, error: `HTTP ${res.status}` };
+  // Apps Script เองรันเสร็จใน 0.4–3 วินาที (หน้า Executions 2026-10-07) แต่บางครั้งคำตอบไม่กลับมาถึง Vercel เลย (เห็น 16:49:
+  // รันเสร็จใน 2.0 วิ แต่ฝั่งเรารอ 20 วิแล้วหมดเวลา) และ cold start เคยช้า 10-15 วิ
+  // → งบเวลา 20 วิเท่าเดิม แต่แบ่งเป็น 2 รอบ รอบละ 10 วิ สำหรับคำสั่งอ่าน; คำสั่งเขียนรอ 20 วิรอบเดียว
+  const attempts = IDEMPOTENT_ACTIONS.has(action) ? 2 : 1;
+  const timeoutMs = attempts === 2 ? 10000 : 20000;
+  let lastErr = '';
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await callGasOnce<T>(webhookUrl, action, payload, timeoutMs);
+    } catch (err) {
+      lastErr = (err as Error).message;
+      log.error('gas.call_failed', { action, attempt, err: lastErr });
     }
-
-    const json = (await res.json()) as GasResponse<T>;
-    log.info('gas.call_ok', { action, ok: json.ok });
-    return json;
-  } catch (err) {
-    log.error('gas.call_failed', { action, err: (err as Error).message });
-    return { ok: false, error: (err as Error).message };
   }
+  return { ok: false, error: lastErr };
 }
 
 // ---- Calendar actions (new — need adding to the Apps Script, see apps-script/) ----
