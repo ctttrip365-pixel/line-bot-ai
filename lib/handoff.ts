@@ -2,6 +2,7 @@
 
 import { Client } from '@line/bot-sdk';
 import { log } from './log';
+import { sendTelegramMessage } from './telegram';
 
 const HANDOFF_TRIGGERS = [
   'คุยกับแชมป์',
@@ -59,23 +60,51 @@ function getLineClient() {
   });
 }
 
+function escapeHtml(t: string): string {
+  return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
+ * แจ้งแชมป์ว่ามีลูกค้าต้องการคนจริง — ส่งทั้งกลุ่มแอดมิน LINE และ Telegram (push เด้งมือถือแชมป์)
+ * สองช่องทางทำงานแยกกัน ช่องหนึ่งพังไม่กระทบอีกช่อง
+ */
 export async function notifyAdmin(
   userId: string,
-  userMessage: string
+  userMessage: string,
+  reason: string = 'ลูกค้าต้องการคุยกับพี่แชมป์'
 ): Promise<void> {
+  const preview = userMessage.length > 500 ? userMessage.slice(0, 500) + '…' : userMessage;
+  const manager = 'https://manager.line.biz/chats';
+
+  // 1) กลุ่มแอดมินใน LINE
   const adminGroupId = process.env.ADMIN_GROUP_ID;
   if (!adminGroupId) {
     log.warn('handoff.no_admin_group', { note: 'ADMIN_GROUP_ID not set' });
-    return;
+  } else {
+    try {
+      await getLineClient().pushMessage(adminGroupId, {
+        type: 'text',
+        text: '🔔 ' + reason + '\n\n' + 'UserID: ' + userId + '\n' + 'ข้อความ: ' + preview + '\n\n' + 'ตอบได้ที่: ' + manager,
+      });
+      log.info('handoff.admin_notified', { userId });
+    } catch (err) {
+      log.error('handoff.notify_failed', { err: (err as Error).message });
+    }
   }
 
+  // 2) Telegram ของแชมป์ (ล้มเหลวจะ log เองใน sendTelegramMessage ไม่ throw)
   try {
-    await getLineClient().pushMessage(adminGroupId, {
-      type: 'text',
-      text: '🔔 ลูกค้าต้องการคุยกับพี่แชมป์' + '\n\n' + 'UserID: ' + userId + '\n' + 'ข้อความ: ' + userMessage + '\n\n' + 'ตอบได้ที่: https://manager.line.biz/chats',
-    });
-    log.info('handoff.admin_notified', { userId });
+    await sendTelegramMessage(
+      [
+        '🔔 <b>' + escapeHtml(reason) + '</b>',
+        '',
+        'ข้อความลูกค้า: ' + escapeHtml(preview),
+        'UserID: <code>' + escapeHtml(userId) + '</code>',
+        '',
+        'ตอบที่ LINE OA Manager: ' + manager,
+      ].join('\n')
+    );
   } catch (err) {
-    log.error('handoff.notify_failed', { err: (err as Error).message });
+    log.error('handoff.telegram_failed', { err: (err as Error).message });
   }
 }

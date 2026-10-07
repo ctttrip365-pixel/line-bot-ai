@@ -69,7 +69,7 @@ export async function POST(req: Request) {
 
       try {
         if (shouldHandoff(userMessage)) {
-          await notifyAdmin(userId, userMessage);
+          await notifyAdmin(userId, userMessage, 'ลูกค้าขอคุยกับคน / คืนเงิน / ยกเลิก / ย้ายวัน / ร้องเรียน');
           const handoffText =
             detectLanguage(userMessage) === 'thai'
               ? 'ขอแจ้งพี่แชมป์ติดต่อกลับนะครับ 🙏'
@@ -96,7 +96,7 @@ export async function POST(req: Request) {
 
         // Gemini ใส่ [HANDOFF] เมื่อหาราคาไม่ได้/เกิน 8 คน → แจ้งแชมป์ (ลูกค้าไม่เห็น marker เพราะ cleanReply ตัดออก)
         if (rawReply.includes('[HANDOFF]')) {
-          await notifyAdmin(userId, userMessage);
+          await notifyAdmin(userId, userMessage, 'บอทส่งต่อ: ตอบเองไม่ได้ (ไม่มีราคา/ไม่มีใน FAQ/ต้องให้คนตัดสินใจ)');
         }
 
         const booking = parseBookingConfirmation(rawReply, userId);
@@ -131,7 +131,8 @@ export async function POST(req: Request) {
               log.warn('booking.no_price', { userId, status: priced.status, pickup: booking.pickup, dropoff: booking.dropoff });
               await notifyAdmin(
                 userId,
-                `ลูกค้ายืนยันจองแต่หาราคาไม่ได้: ${booking.pickup} → ${booking.dropoff}, ${booking.pax} คน, ${booking.date} ${booking.time}`
+                `ลูกค้ายืนยันจองแต่หาราคาไม่ได้: ${booking.pickup} → ${booking.dropoff}, ${booking.pax} คน, ${booking.date} ${booking.time}`,
+                'ลูกค้ายืนยันจองแต่ไม่มีราคาเส้นทางนี้ — ต้องยืนยันราคา'
               );
               finalReply = [finalReply, '', 'ขอให้พี่แชมป์ยืนยันราคาให้ก่อนนะครับ แล้วจะส่งลิงก์ชำระเงินให้เลยครับ 🙏'].join('\n');
             } else {
