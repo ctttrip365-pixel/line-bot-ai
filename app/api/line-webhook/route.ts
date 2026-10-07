@@ -4,7 +4,7 @@
 import { after } from 'next/server';
 import { Client, validateSignature, WebhookEvent } from '@line/bot-sdk';
 import { fetchFAQ } from '@/lib/sheet';
-import { generateReply, DEFAULT_REPLY } from '@/lib/gemini';
+import { generateReply, DEFAULT_REPLY, DEFAULT_REPLY_EN } from '@/lib/gemini';
 import { shouldHandoff, notifyAdmin } from '@/lib/handoff';
 import { detectLanguage } from '@/lib/language';
 import { parseBookingConfirmation, cleanReply } from '@/lib/calendar';
@@ -87,11 +87,19 @@ export async function POST(req: Request) {
         const rawReply = await Promise.race([
           generateReply(userMessage, faqText, history),
           new Promise<string>((_, reject) =>
-            setTimeout(() => reject(new Error('gemini_timeout')), 12000)
+            setTimeout(() => reject(new Error('gemini_timeout')), 18000)
           ),
         ]).catch((err) => {
           log.error('gemini.failed', { err: err.message, userId });
-          return DEFAULT_REPLY;
+          // ลูกค้าได้ข้อความ "ขอเวลาเช็ค" — ต้องแจ้งแชมป์ (LINE + Telegram) ให้ตอบเอง ไม่ปล่อยให้ลูกค้าถูกทิ้งเงียบๆ
+          after(() =>
+            notifyAdmin(
+              userId,
+              userMessage,
+              'บอทตอบไม่ได้ (Gemini ล้มเหลว/ช้า/ตอบว่าง) — ลูกค้าได้ข้อความ "ขอเวลาเช็ค" โปรดตอบลูกค้าเอง'
+            ).catch(() => {})
+          );
+          return detectLanguage(userMessage) === 'thai' ? DEFAULT_REPLY : DEFAULT_REPLY_EN;
         });
 
         // Gemini ใส่ [HANDOFF] เมื่อหาราคาไม่ได้/เกิน 8 คน → แจ้งแชมป์ (ลูกค้าไม่เห็น marker เพราะ cleanReply ตัดออก)

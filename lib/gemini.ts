@@ -18,6 +18,37 @@ export const DEFAULT_REPLY_EN =
 export const DEFAULT_REPLY =
   'ขออภัยนะครับ ขอเวลาเช็คให้สักครู่ได้เลยครับ 🙏 หรือโทรหาพี่แชมป์ได้เลยครับที่ +66 94 269 4651';
 
+/**
+ * เรียก Gemini โดยลองใหม่ 1 ครั้งถ้าตอบ "ว่างเปล่า" (ไม่มีทั้งข้อความและการเรียก tool)
+ * — เกิดจริงบน production 2026-10-07 15:49 (finishReason=STOP แต่ candidatesTokenCount=0, prompt ~19k โทเค็นเพราะ FAQ ยาว)
+ * temperature 0.6 (เดิม 1.0) ให้ตอบนิ่งขึ้น เพราะเป็นบอทขาย/บอกราคา
+ */
+async function callModel(
+  ai: GoogleGenAI,
+  contents: Content[],
+  systemPrompt: string,
+  tools: unknown
+): Promise<Awaited<ReturnType<GoogleGenAI['models']['generateContent']>>> {
+  const MAX_ATTEMPTS = 2;
+  let response: Awaited<ReturnType<GoogleGenAI['models']['generateContent']>> | undefined;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    response = await ai.models.generateContent({
+      model: MODEL,
+      contents,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      config: { systemInstruction: systemPrompt, temperature: 0.6, maxOutputTokens: 1024, tools: tools as any },
+    });
+    const hasOutput = (response.functionCalls?.length ?? 0) > 0 || !!response.text?.trim();
+    if (hasOutput) return response;
+    log.warn('gemini.empty_response_retry', {
+      attempt,
+      finishReason: response.candidates?.[0]?.finishReason,
+      totalTokens: response.usageMetadata?.totalTokenCount,
+    });
+  }
+  return response!;
+}
+
 export async function generateReply(
   userMessage: string,
   faqText: string,
@@ -63,11 +94,7 @@ export async function generateReply(
   ];
 
   const MAX_TOOL_ROUNDS = 3;
-  let response = await ai.models.generateContent({
-    model: MODEL,
-    contents,
-    config: { systemInstruction: systemPrompt, temperature: 1.0, maxOutputTokens: 1024, tools },
-  });
+  let response = await callModel(ai, contents, systemPrompt, tools);
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const calls = response.functionCalls;
@@ -93,11 +120,7 @@ export async function generateReply(
     );
     contents.push({ role: 'user', parts: responseParts });
 
-    response = await ai.models.generateContent({
-      model: MODEL,
-      contents,
-      config: { systemInstruction: systemPrompt, temperature: 1.0, maxOutputTokens: 1024, tools },
-    });
+    response = await callModel(ai, contents, systemPrompt, tools);
   }
 
   const usage = response.usageMetadata;
@@ -128,7 +151,7 @@ export async function generateReply(
         candidatesTokenCount: usage?.candidatesTokenCount,
       })
     );
-    return fallbackReply;
+    throw new Error('gemini_max_tokens');
   }
 
   // ดึงเฉพาะข้อความใน <reply> (ทิ้ง "THINK ..." ที่หลุดมา) ถ้าโมเดลเขียนความคิดล้วนๆ → ใช้ข้อความ fallback
@@ -137,7 +160,7 @@ export async function generateReply(
   const reply = extractReply(raw);
   if (!reply) {
     log.warn('gemini.reply_unusable', { lang, startsWith: raw.slice(0, 20) });
-    return fallbackReply;
+    throw new Error('gemini_unusable_reply');
   }
 
   return reply;
