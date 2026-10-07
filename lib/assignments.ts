@@ -38,6 +38,19 @@ export async function listAssignments(): Promise<AssignmentRow[]> {
   return res.data;
 }
 
+/**
+ * อ่าน Assignments_Log แบบ "ล้มเหลวต้องรู้" (listAssignments คืน [] เมื่อพัง ซึ่งแยกไม่ออกจาก "ไม่มีงาน")
+ * ลองซ้ำ 1 ครั้ง เพราะ Apps Script cold start ครั้งแรกมักหมดเวลา ครั้งที่สองมักเร็ว
+ */
+export async function listAssignmentsStrict(): Promise<AssignmentRow[]> {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const res = await sheetRead<AssignmentRow[]>('Assignments_Log');
+    if (res.ok && res.data) return res.data;
+    log.warn('assignments.strict_read_retry', { attempt, error: res.error });
+  }
+  throw new Error('assignments_read_failed');
+}
+
 export async function proposeAssignment(row: {
   bookingEventId: string;
   calendarId: string;

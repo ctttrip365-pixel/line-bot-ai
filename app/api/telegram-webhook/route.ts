@@ -5,7 +5,7 @@
 // set at registration time (see apps-script/README or the setWebhook call in Phase 0).
 
 import { answerCallbackQuery, sendTelegramMessage, TelegramUpdate } from '@/lib/telegram';
-import { confirmAssignment, cancelAssignment, listAssignments } from '@/lib/assignments';
+import { confirmAssignment, cancelAssignment, listAssignmentsStrict } from '@/lib/assignments';
 import { listCalendarEvents } from '@/lib/gas-client';
 import { listDrivers } from '@/lib/drivers';
 import { getLeaveRequest, resolveLeaveRequest } from '@/lib/leave';
@@ -24,7 +24,7 @@ async function invalidateJobsCacheForVisibleMonths(): Promise<void> {
 
 /** งานที่ลงคนขับแล้ว (confirmed/notified) ตั้งแต่วันนี้เป็นต้นไป เรียงตามวัน พร้อมปุ่ม ❌ ยกเลิกรายงาน */
 async function sendJobsList(): Promise<void> {
-  const [assignments, drivers] = await Promise.all([listAssignments(), listDrivers()]);
+  const [assignments, drivers] = await Promise.all([listAssignmentsStrict(), listDrivers()]);
   const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10); // วันที่ไทย
   const horizon = new Date(Date.now() + 7 * 3600 * 1000 + 60 * 24 * 3600 * 1000).toISOString().slice(0, 10); // 2 เดือนข้างหน้า
   const jobs = assignments
@@ -73,15 +73,23 @@ export async function POST(req: Request) {
 
   const update = (await req.json()) as TelegramUpdate;
 
-  // ข้อความที่แชมป์พิมพ์เอง: /jobs = ดูงานที่ลงคนขับแล้ว พร้อมปุ่มยกเลิกรายงาน (ตอบเฉพาะแชมป์เท่านั้น)
+  // ข้อความที่แชมป์พิมพ์เอง: /job /jobs /งาน = ดูงานที่ลงคนขับแล้ว พร้อมปุ่มยกเลิกรายงาน (ตอบเฉพาะแชมป์เท่านั้น)
   if (update.message?.text) {
     const champChat = process.env.TELEGRAM_CHAMP_CHAT_ID;
-    if (champChat && String(update.message.chat.id) === champChat && /^\/?(jobs|help)\b|^\/?งาน/i.test(update.message.text.trim())) {
-      try {
-        await sendJobsList();
-      } catch (err) {
-        log.error('telegram_webhook.jobs_failed', { err: (err as Error).message });
-        await sendTelegramMessage('ดึงรายการงานไม่ได้ชั่วคราว ลองใหม่อีกครั้งครับ');
+    if (champChat && String(update.message.chat.id) === champChat) {
+      const text = update.message.text.trim();
+      if (/^\/?jobs?\b|^\/?งาน/i.test(text)) {
+        // ตอบรับทันที: Apps Script อาจใช้เวลาหลายสิบวินาทีตอนเริ่มทำงาน แชมป์จะได้รู้ว่าคำสั่งเข้าแล้ว
+        await sendTelegramMessage('⏳ กำลังดึงรายการงาน... (ถ้า Apps Script ช้าอาจใช้เวลาครึ่งนาที)');
+        try {
+          await sendJobsList();
+        } catch (err) {
+          log.error('telegram_webhook.jobs_failed', { err: (err as Error).message });
+          // ห้ามบอกว่า "ไม่มีงาน" เมื่อแค่อ่านข้อมูลไม่ได้
+          await sendTelegramMessage('⚠️ ดึงรายการงานไม่ได้ (Apps Script ช้า/ไม่ตอบ) ลองพิมพ์ /jobs อีกครั้งในอีก 1 นาทีนะครับ');
+        }
+      } else {
+        await sendTelegramMessage('คำสั่งที่ใช้ได้: /jobs (หรือ /job, /งาน) = ดูงานที่ลงคนขับแล้วภายใน 2 เดือน พร้อมปุ่มยกเลิกคนขับ');
       }
     }
     return new Response('ok', { status: 200 });
