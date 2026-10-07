@@ -67,7 +67,7 @@ export async function POST(req: Request) {
       try {
         if (shouldHandoff(userMessage)) {
           await notifyAdmin(userId, userMessage);
-          await replyWithRetry(event.replyToken!, 'ขอแจ้พี่แชมป์ติดต่อกลับนะครับ 🙏', 3);
+          await replyWithRetry(event.replyToken!, 'ขอแจ้งพี่แชมป์ติดต่อกลับนะครับ 🙏', 3);
           log.info('handoff.routed', { userId, latencyMs: Date.now() - startTime });
           return;
         }
@@ -80,12 +80,17 @@ export async function POST(req: Request) {
         const rawReply = await Promise.race([
           generateReply(userMessage, faqText, history),
           new Promise<string>((_, reject) =>
-            setTimeout(() => reject(new Error('gemini_timeout')), 8000)
+            setTimeout(() => reject(new Error('gemini_timeout')), 12000)
           ),
         ]).catch((err) => {
           log.error('gemini.failed', { err: err.message, userId });
           return DEFAULT_REPLY;
         });
+
+        // Gemini ใส่ [HANDOFF] เมื่อหาราคาไม่ได้/เกิน 8 คน → แจ้งแชมป์ (ลูกค้าไม่เห็น marker เพราะ cleanReply ตัดออก)
+        if (rawReply.includes('[HANDOFF]')) {
+          await notifyAdmin(userId, userMessage);
+        }
 
         const booking = parseBookingConfirmation(rawReply, userId);
         let finalReply = cleanReply(rawReply);

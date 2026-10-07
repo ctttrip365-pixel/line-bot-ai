@@ -96,5 +96,6 @@ export async function createCalendarEvent(
 export function cleanReply(reply: string): string {
   return reply
     .replace(/\[BOOKING_CONFIRMED\][\s\S]*?\[\/BOOKING_CONFIRMED\]\n?/, '')
+    .replace(/\[HANDOFF\]/g, '')
     .trim();
 }
