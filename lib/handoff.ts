@@ -21,6 +21,27 @@ const HANDOFF_TRIGGERS = [
   'ขายส่ง',
   'wholesale',
   'franchise',
+  // เรื่องเงิน/เปลี่ยนแปลงการจอง — บอทจัดการเองไม่ได้ ต้องส่งต่อแชมป์
+  'คืนเงิน',
+  'ขอยกเลิก',
+  'ยกเลิกการจอง',
+  'ยกเลิกจอง',
+  'ย้ายวัน',
+  'เลื่อนวัน',
+  'เปลี่ยนวัน',
+  'refund',
+  'cancel my',
+  'cancel the',
+  'cancel booking',
+  'want to cancel',
+  'to cancel',
+  'cancellation',
+  'reschedule',
+  'change the date',
+  'change my booking',
+  'real person',
+  'talk to a human',
+  'complaint',
 ];
 
 export function shouldHandoff(message: string): boolean {

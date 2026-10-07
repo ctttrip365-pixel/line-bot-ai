@@ -6,6 +6,7 @@ import { Client, validateSignature, WebhookEvent } from '@line/bot-sdk';
 import { fetchFAQ } from '@/lib/sheet';
 import { generateReply, DEFAULT_REPLY } from '@/lib/gemini';
 import { shouldHandoff, notifyAdmin } from '@/lib/handoff';
+import { detectLanguage } from '@/lib/language';
 import { parseBookingConfirmation, cleanReply } from '@/lib/calendar';
 import { createCheckoutSession } from '@/lib/stripe';
 import { lookupPrice } from '@/lib/prices';
@@ -69,7 +70,11 @@ export async function POST(req: Request) {
       try {
         if (shouldHandoff(userMessage)) {
           await notifyAdmin(userId, userMessage);
-          await replyWithRetry(event.replyToken!, 'ขอแจ้งพี่แชมป์ติดต่อกลับนะครับ 🙏', 3);
+          const handoffText =
+            detectLanguage(userMessage) === 'thai'
+              ? 'ขอแจ้งพี่แชมป์ติดต่อกลับนะครับ 🙏'
+              : "I'll let Champ know and we'll get back to you shortly 🙏";
+          await replyWithRetry(event.replyToken!, handoffText, 3);
           log.info('handoff.routed', { userId, latencyMs: Date.now() - startTime });
           return;
         }
