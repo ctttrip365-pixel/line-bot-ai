@@ -20,6 +20,8 @@ interface PriceRow {
   price13: number;
   price48: number;
   note: string;
+  link13: string; // Stripe Payment Link (ว่าง = ไม่มีลิงก์ประจำเส้นทางนี้)
+  link48: string;
 }
 
 interface PriceData {
@@ -32,7 +34,7 @@ interface PriceData {
 let cache: { data: PriceData; expiresAt: number } | null = null;
 
 export type PriceLookupResult =
-  | { status: 'ok'; from: string; to: string; pax: number; paxBand: '1-3' | '4-8'; price: number; note: string }
+  | { status: 'ok'; from: string; to: string; pax: number; paxBand: '1-3' | '4-8'; price: number; note: string; paymentLink?: string }
   | { status: 'ambiguous'; place: string; options: string[]; message: string }
   | { status: 'handoff'; reason: string; message: string }
   | { status: 'not_found'; message: string };
@@ -98,6 +100,12 @@ async function fetchTab(tab: string): Promise<string[][]> {
   return parseCsv(await res.text());
 }
 
+// รับเฉพาะลิงก์ Payment Link ของ Stripe (https://buy.stripe.com/...) กันค่าผิด/ลิงก์แปลกปลอมในชีตหลุดไปถึงลูกค้า
+function safePaymentLink(s: string | undefined): string {
+  const v = (s ?? '').trim();
+  return /^https:\/\/buy\.stripe\.com\/[A-Za-z0-9_]+$/.test(v) ? v : '';
+}
+
 function toNumber(s: string): number {
   return Number(String(s).replace(/[,\s]/g, ''));
 }
@@ -108,13 +116,13 @@ function buildData(priceRows: string[][], aliasRows: string[][]): PriceData {
   const zoneNames = new Map<string, string>();
 
   for (const r of priceRows.slice(1)) {
-    const [from, to, p13, p48, note, active] = r.map((c) => (c ?? '').trim());
+    const [from, to, p13, p48, note, active, l13, l48] = r.map((c) => (c ?? '').trim());
     if (!from || !to) continue;
     if (active && active.toUpperCase() !== 'TRUE') continue;
     const price13 = toNumber(p13);
     const price48 = toNumber(p48);
     if (!Number.isFinite(price13) || !Number.isFinite(price48) || price13 <= 0 || price48 <= 0) continue;
-    const row: PriceRow = { from, to, price13, price48, note: note ?? '' };
+    const row: PriceRow = { from, to, price13, price48, note: note ?? '', link13: safePaymentLink(l13), link48: safePaymentLink(l48) };
     rows.push(row);
     rowIndex.set(`${norm(from)}|${norm(to)}`, row);
     zoneNames.set(norm(from), from);
@@ -218,6 +226,7 @@ export async function lookupPrice(origin: string, destination: string, pax: numb
         paxBand: small ? '1-3' : '4-8',
         price: small ? row.price13 : row.price48,
         note: row.note,
+        paymentLink: (small ? row.link13 : row.link48) || undefined,
       };
     }
   }

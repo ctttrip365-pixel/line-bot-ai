@@ -8,6 +8,8 @@ import { generateReply, DEFAULT_REPLY } from '@/lib/gemini';
 import { shouldHandoff, notifyAdmin } from '@/lib/handoff';
 import { parseBookingConfirmation, cleanReply } from '@/lib/calendar';
 import { createCheckoutSession } from '@/lib/stripe';
+import { lookupPrice } from '@/lib/prices';
+import { newBookingRef, savePendingBooking } from '@/lib/bookings';
 import { getHistory, appendHistory } from '@/lib/history';
 import { findDriverByLineId } from '@/lib/drivers';
 import { handleDriverMessage, handleDriverPostback } from '@/lib/driver-flow';
@@ -103,20 +105,44 @@ export async function POST(req: Request) {
           });
 
           try {
-            const amount = Number(booking.amount) || 600;
-            const paymentUrl = await createCheckoutSession({
-              amount, date: booking.date, time: booking.time,
-              pickup: booking.pickup, dropoff: booking.dropoff,
-              pax: booking.pax, lineUserId: userId,
-            });
-            finalReply = [
-              finalReply, '',
-              '💳 ชำระเงินได้ที่ลิงก์นี้เลยครับ:',
-              paymentUrl, '',
-              '⏱ ลิงก์หมดอายุใน 1 ชั่วโมง',
-              'หลังชำระแล้วจะได้รับการยืนยันทาง LINE ทันทีเลยครับ',
-            ].join('\n');
-            log.info('stripe.link_created', { userId, amount, paymentUrl });
+            // ราคาให้เซิร์ฟเวอร์ค้นเองจากชีต ไม่เชื่อตัวเลขที่ Gemini เขียนมาในบล็อก (เดิมไม่มีราคา = เก็บ 600)
+            const priced = await lookupPrice(booking.pickup, booking.dropoff, Number(booking.pax));
+            if (priced.status !== 'ok') {
+              log.warn('booking.no_price', { userId, status: priced.status, pickup: booking.pickup, dropoff: booking.dropoff });
+              await notifyAdmin(
+                userId,
+                `ลูกค้ายืนยันจองแต่หาราคาไม่ได้: ${booking.pickup} → ${booking.dropoff}, ${booking.pax} คน, ${booking.date} ${booking.time}`
+              );
+              finalReply = [finalReply, '', 'ขอให้พี่แชมป์ยืนยันราคาให้ก่อนนะครับ แล้วจะส่งลิงก์ชำระเงินให้เลยครับ 🙏'].join('\n');
+            } else {
+              const amount = priced.price;
+              let paymentUrl: string;
+              let footer: string;
+              if (priced.paymentLink) {
+                // Stripe Payment Link ประจำเส้นทาง (ราคาถูกล็อกไว้ที่ลิงก์) — เก็บรายละเอียดจองไว้ฝั่งเรา
+                // แล้วให้ webhook ค้นกลับด้วย client_reference_id
+                const ref = newBookingRef();
+                await savePendingBooking({ ...booking, amount: String(amount), ref });
+                paymentUrl = `${priced.paymentLink}?client_reference_id=${ref}`;
+                footer = '📝 กรอกชื่อและเบอร์โทรในหน้าชำระเงินด้วยนะครับ';
+                log.info('stripe.payment_link_used', { userId, ref, amount });
+              } else {
+                paymentUrl = await createCheckoutSession({
+                  amount, date: booking.date, time: booking.time,
+                  pickup: booking.pickup, dropoff: booking.dropoff,
+                  pax: booking.pax, lineUserId: userId,
+                });
+                footer = '⏱ ลิงก์หมดอายุใน 1 ชั่วโมง';
+                log.info('stripe.link_created', { userId, amount });
+              }
+              finalReply = [
+                finalReply, '',
+                '💳 ชำระเงินได้ที่ลิงก์นี้เลยครับ:',
+                paymentUrl, '',
+                footer,
+                'หลังชำระแล้วจะได้รับการยืนยันทาง LINE ทันทีเลยครับ',
+              ].join('\n');
+            }
           } catch (err) {
             log.error('stripe.link_failed', { err: (err as Error).message, userId });
             finalReply = [
