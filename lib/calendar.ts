@@ -11,7 +11,21 @@ export interface BookingDetails {
   amount?: string; // ราคา เป็นตัวเลข string เช่น "600"
   bookingRef?: string; // CTT-yymmdd-xxxx (Payment Link) — ใช้เป็นชื่อ/Booking No ของ event
   guestName?: string; // ชื่อที่ลูกค้ากรอกตอนจ่ายเงิน
-  phone?: string;
+  phone?: string; // เบอร์โทรติดต่อ (ขอในแชทก่อนจ่ายเงินทุกครั้ง)
+  flight?: string; // หมายเลขเที่ยวบิน (ขอเมื่อรับจากสนามบิน) — Apps Script รับเป็นฟิลด์ flight
+}
+
+/** จุดรับเป็นสนามบินหรือไม่ (ต้องขอหมายเลขเที่ยวบินก่อนจ่ายเงิน) */
+export function isAirportPickup(pickup: string): boolean {
+  return /สนามบิน|airport|\b(KBV|HKT|DMK|BKK)\b/i.test(pickup);
+}
+
+/** ข้อมูลที่ต้องมีก่อนออกลิงก์ชำระเงิน (แชมป์สั่ง 8 ต.ค. 2026): เบอร์โทรลูกค้าทุกครั้ง + หมายเลขเที่ยวบินเมื่อรับจากสนามบิน */
+export function missingBookingInfo(b: BookingDetails): Array<'phone' | 'flight'> {
+  const missing: Array<'phone' | 'flight'> = [];
+  if ((b.phone ?? '').replace(/\D/g, '').length < 8) missing.push('phone');
+  if (isAirportPickup(b.pickup) && !(b.flight ?? '').trim()) missing.push('flight');
+  return missing;
 }
 
 /**
@@ -39,11 +53,13 @@ export function parseBookingConfirmation(
   const dropoff = get('dropoff');
   const pax = get('pax');
   const amount = get('amount');
+  const phone = get('phone');
+  const flight = get('flight');
 
   // Validate required fields
   if (!date || !time || !pickup || !dropoff) return null;
 
-  return { date, time, pickup, dropoff, pax: pax || '1', userId, amount: amount || '0' };
+  return { date, time, pickup, dropoff, pax: pax || '1', userId, amount: amount || '0', phone: phone || undefined, flight: flight || undefined };
 }
 
 /**

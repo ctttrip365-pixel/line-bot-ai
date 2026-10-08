@@ -12,6 +12,7 @@ export interface ParsedBooking {
   contact: string;
   pickupTime: string;
   bookingNo: string;
+  flightNo: string; // บรรทัด "Flight No:" (บอท LINE เพิ่มเมื่อรับจากสนามบิน; ว่างถ้าไม่มี)
 }
 
 function extract(description: string, label: string): string {
@@ -28,6 +29,7 @@ export function parseBookingDescription(description: string): ParsedBooking {
     contact: extract(description, 'Contact'),
     pickupTime: extract(description, 'Boat/Flight time') || extract(description, 'Arrive'),
     bookingNo: extract(description, 'Booking No'),
+    flightNo: extract(description, 'Flight No'),
   };
 
   // งานที่บอท LINE สร้างเองแบบเดิม (Apps Script handleLegacyCreate_) เขียน description เป็น

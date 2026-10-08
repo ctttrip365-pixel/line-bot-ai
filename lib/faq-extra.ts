@@ -12,6 +12,102 @@ export interface ExtraFaqRow {
 }
 
 export const EXTRA_FAQ: ExtraFaqRow[] = [
+  // ---- ทัวร์ 4 เกาะ: ราคามีในชีตแล้ว (แถว 15) แต่ฝังในคำตอบ "ที่ไหนบ้าง" ซึ่งอันดับต่ำเมื่อถามเรื่องราคา — แยกเป็นแถวราคาตรงๆ (ข้อมูลเดิม ไม่เพิ่มใหม่) ----
+  {
+    category: 'ทัวร์และการท่องเที่ยว',
+    question: 'ทัวร์ 4 เกาะกระบี่ราคาเท่าไหร่ ทัวร์ 4 เกาะกี่บาท',
+    answer: 'ทัวร์ 4 เกาะ ราคา 800 บาท/คน (สปีดโบ๊ท) ไปเยือนเกาะโบ๊ท เกาะไก่ ทะเลแหวก (Unseen Thailand) Emerald Cave และหาดสวยใสครับ',
+  },
+  {
+    category: 'Tours & Activities',
+    question: 'How much is the 4-Island tour in Krabi?',
+    answer: 'The 4-Island tour (speedboat) is 800 THB per person, visiting Koh Poda, Chicken Island, the Tup Island sandbar (Unseen Thailand), Emerald Cave and a beautiful beach.',
+  },
+  // ---- ชุดที่ 2 (แชมป์ตอบ 8 ต.ค. 2026): ค่าบริการเสริม / หน้างาน / ล่าม ---- (ตัวเลขเหล่านี้เป็นราคาขายลูกค้า ไม่บวก 15%)
+  {
+    category: 'ค่าบริการเสริม',
+    question: 'ขอแวะระหว่างทาง แวะทานข้าว แวะซื้อของ แวะร้านยา มีค่าใช้จ่ายไหม',
+    answer: 'แวะระหว่างทางได้ครับ แวะไม่เกิน 15 นาทีฟรี ถ้าเกิน 15 นาที ค่าแวะระหว่างทาง 100 บาท และบวกเพิ่มชั่วโมงละ 100 บาทครับ',
+  },
+  {
+    category: 'Extra services',
+    question: 'Can we make a stop on the way for lunch shopping or a pharmacy? Is there an extra charge?',
+    answer: 'Yes, stops on the way are possible. A stop of up to 15 minutes is free. Beyond 15 minutes the stop-over fee is 100 THB, plus an additional 100 THB per hour.',
+  },
+  {
+    category: 'ค่าบริการเสริม',
+    question: 'เครื่องบินดีเลย์ ลงช้า ต้องรอนานไหม ค่ารอคิดยังไง รอชั่วโมงละเท่าไหร่ เกินเวลาคิดเพิ่มไหม',
+    answer:
+      'รอฟรีไม่เกิน 30 นาทีนับจากเวลาเครื่องลงครับ หลังจากนั้นคิดค่ารอชั่วโมงละ 100 บาท รบกวนแจ้งหมายเลขเที่ยวบินตอนจองเพื่อให้กำหนดเวลารับได้ถูกต้องครับ',
+  },
+  {
+    category: 'Extra services',
+    question: 'My flight is delayed. How long will the driver wait and is there a waiting fee?',
+    answer:
+      'Waiting is free for up to 30 minutes after the landing time. After that, the waiting fee is 100 THB per hour. Please give us your flight number when booking so we can set the pickup time correctly.',
+  },
+  {
+    category: 'ค่าบริการเสริม',
+    question: 'ต้องการเก้าอี้เด็ก คาร์ซีท ที่นั่งเด็ก ต้องจ่ายเพิ่มไหม มีกี่ตัว',
+    answer: 'มีเก้าอี้เด็กให้ฟรีสูงสุด 2 ตัวครับ ถ้าต้องการมากกว่า 2 ตัว คิดเพิ่ม 100 บาท (ครั้งเดียวรวม ไม่คิดต่อตัว) รบกวนแจ้งจำนวนล่วงหน้าตอนจองครับ',
+  },
+  {
+    category: 'Extra services',
+    question: 'Do you provide child seats? Is it free? How many?',
+    answer: 'Yes, up to 2 child seats are free. If you need more than 2, there is a single extra charge of 100 THB in total (not per seat). Please tell us how many you need when booking.',
+  },
+  {
+    category: 'ค่าบริการเสริม',
+    question: 'ต้องการล่าม บริการล่ามสื่อสาร คนขับพูดภาษาอื่นได้ไหม ค่าล่าม',
+    answer: 'มีบริการล่ามสื่อสารครับ คิดเพิ่ม 600 บาทต่อรอบ รบกวนแจ้งภาษาที่ต้องการ พี่แชมป์จะยืนยันให้ครับ',
+  },
+  {
+    category: 'Extra services',
+    question: 'I need an interpreter or a driver who speaks my language. How much?',
+    answer: 'An interpreter service is available for an extra 600 THB per trip. Please tell us the language you need and Champ will confirm.',
+  },
+  {
+    category: 'ปัญหาหน้างาน',
+    question: 'ขอเบอร์คนขับ เบอร์โทรคนขับ ติดต่อคนขับยังไง',
+    answer: 'ติดต่อคนขับได้ที่เบอร์ +66 94 269 4651 ครับ เป็นเบอร์ของพี่แชมป์ซึ่งเป็นคนขับด้วย และจะประสานงานกับคนขับให้ครับ',
+  },
+  {
+    category: 'On-site issues',
+    question: 'Can I have the driver phone number? How do I contact my driver?',
+    answer: 'You can reach your driver at +66 94 269 4651. This is Champ\'s number (Champ is also one of our drivers) and he will coordinate with the driver for you.',
+  },
+  {
+    category: 'ผู้โดยสารพิเศษ',
+    question: 'ผู้โดยสารเดินไม่ได้ ขอรถเข็น ผู้ป่วย ผู้สูงอายุ ผู้พิการ ต้องการความช่วยเหลือ',
+    answer:
+      'โดยปกติสายการบินมีบริการรถเข็นให้จนถึงรถตู้ของเราครับ หลังจากนั้นขึ้นอยู่กับทางโรงแรมว่ามีบริการรถเข็นให้หรือไม่ รบกวนแจ้งชื่อโรงแรมและรายละเอียดมาล่วงหน้า พี่แชมป์จะช่วยประสานงานครับ',
+  },
+  {
+    category: 'Special passengers',
+    question: 'A passenger cannot walk. Can you arrange a wheelchair? elderly disabled assistance',
+    answer:
+      'Normally the airline provides wheelchair service until the passenger boards our van. After that it depends on whether your hotel offers wheelchair service. Please tell us your hotel and details in advance and Champ will help coordinate.',
+  },
+  {
+    category: 'ปัญหาหน้างาน',
+    question: 'จุดนัดรับที่สนามบินกระบี่ รอตรงไหน ประตูไหน ทางออกไหน เจอกันที่ไหน',
+    answer: 'จุดนัดรับที่สนามบินกระบี่คือ ประตูทาง 15 ครับ',
+  },
+  {
+    category: 'On-site issues',
+    question: 'Where is the meeting point at Krabi Airport? Which door or exit should I wait at?',
+    answer: 'The meeting point at Krabi Airport is Door 15.',
+  },
+  {
+    category: 'ประเภทรถ',
+    question: 'ขอรูปรถ ดูรูปรถหน่อย รูปรถตู้ รูปรถ SUV',
+    answer: 'ได้ครับ พี่แชมป์จะส่งรูปรถให้ทางแชทนี้นะครับ',
+  },
+  {
+    category: 'Vehicle types',
+    question: 'Can I see pictures of your vehicles? photos of the van or SUV',
+    answer: 'Sure, Champ will send you photos of our vehicles in this chat.',
+  },
   // ---- ความจุ / ประเภทรถ (แชมป์ยืนยัน 8 ต.ค. 2026: รถตู้นั่งสูงสุด 9 คน, มีรถทุกแบบ ทีมใหญ่ จัดรถเอง) ----
   {
     category: 'การรับ-ส่ง (Airport Transfer)',

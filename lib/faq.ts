@@ -14,7 +14,7 @@ import { log } from './log';
 
 const CACHE_TTL_MS = 60_000;
 const FETCH_TIMEOUT_MS = 6000;
-const MAX_RESULTS = 4;
+const MAX_RESULTS = 6;
 
 // เกณฑ์คะแนน (สัดส่วนน้ำหนักคำของคำถามลูกค้าที่พบในแถว FAQ) — ปรับจากการทดสอบกับชีตจริง
 export const STRONG_SCORE = 0.6;

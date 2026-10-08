@@ -14,6 +14,9 @@ export interface StripeBookingParams {
   dropoff: string;
   pax: string;
   lineUserId: string;
+  ref?: string; // CTT-yymmdd-xxxx — ผูกกับรายละเอียดจองใน Redis (ใช้เป็น client_reference_id)
+  phone?: string;
+  flight?: string;
 }
 
 /**
@@ -39,6 +42,7 @@ export async function createCheckoutSession(
       },
     ],
     mode: 'payment',
+    ...(params.ref ? { client_reference_id: params.ref } : {}),
     // หลังจ่ายแล้ว redirect กลับ LINE OA CTT
     success_url: 'https://line.me/ti/p/@233wdubx?openExternalBrowser=1',
     cancel_url:  'https://line.me/ti/p/@233wdubx?openExternalBrowser=1',
@@ -51,6 +55,9 @@ export async function createCheckoutSession(
       pax:        params.pax,
       lineUserId: params.lineUserId,
       amount:     String(params.amount),
+      ...(params.ref ? { ref: params.ref } : {}),
+      ...(params.phone ? { phone: params.phone } : {}),
+      ...(params.flight ? { flight: params.flight } : {}),
     },
     expires_at: Math.floor(Date.now() / 1000) + 3600, // หมดอายุ 1 ชั่วโมง
   });

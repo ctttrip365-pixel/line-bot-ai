@@ -12,6 +12,8 @@ import { lookupPrice } from '@/lib/prices';
 import { newBookingRef, savePendingBooking } from '@/lib/bookings';
 import { getHistory, appendHistory } from '@/lib/history';
 import { isLaughterOnly } from '@/lib/chat-filters';
+import { missingBookingInfo } from '@/lib/calendar';
+import { wantsCarPhotos, carPhotoMessages } from '@/lib/car-photos';
 import { findDriverByLineId, driverRosterUnavailable } from '@/lib/drivers';
 import { handleDriverMessage, handleDriverPostback } from '@/lib/driver-flow';
 import { log } from '@/lib/log';
@@ -92,6 +94,23 @@ export async function POST(req: Request) {
         return;
       }
 
+      // ลูกค้าขอดูรูปรถ → ส่งรูปจริงในแชท (ตั้งรูปใน lib/car-photos.ts) ถ้ายังไม่ได้ตั้ง ปล่อยให้บอทตอบจาก FAQ + ส่งต่อพี่แชมป์
+      if (wantsCarPhotos(userMessage)) {
+        const photos = carPhotoMessages();
+        if (photos.length > 0) {
+          const th = detectLanguage(userMessage) === 'thai';
+          const intro = th ? 'นี่คือรูปรถของ CTT ครับ 🚐 สนใจจองหรือสอบถามเพิ่มเติมได้เลยครับ' : 'Here are photos of our vehicles 🚐 Feel free to ask or book anytime.';
+          try {
+            await getLineClient().replyMessage(event.replyToken!, [{ type: 'text', text: intro }, ...photos]);
+            log.info('car_photos.sent', { userId, count: photos.length });
+            after(() => appendHistory(userId, userMessage, intro).catch(() => {}));
+            return;
+          } catch (err) {
+            log.error('car_photos.failed', { userId, err: (err as Error).message }); // รูปส่งไม่ได้ → ตกไปให้บอทตอบตามปกติ
+          }
+        }
+      }
+
       const startTime = Date.now();
 
       try {
@@ -150,7 +169,26 @@ export async function POST(req: Request) {
           ].join('\n').trim();
         }
 
-        if (booking) {
+        // ก่อนออกลิงก์ชำระเงินต้องมีเบอร์โทรลูกค้า (+ หมายเลขเที่ยวบินถ้ารับจากสนามบิน) — แชมป์สั่ง 8 ต.ค. 2026
+        // Gemini ไม่ขอหรือใส่ไม่ครบ → ไม่สร้างลิงก์ ขอข้อมูลที่ขาดแทน
+        const missingInfo = booking ? missingBookingInfo(booking) : [];
+        if (booking && missingInfo.length > 0) {
+          log.warn('booking.missing_contact_info', { userId, missing: missingInfo });
+          const th = detectLanguage(userMessage) === 'thai';
+          const names = missingInfo.map((m) => (m === 'phone' ? (th ? 'เบอร์โทรติดต่อ' : 'contact phone number') : th ? 'หมายเลขเที่ยวบิน' : 'flight number'));
+          finalReply = finalReply
+            .split('\n')
+            .filter((l) => !/ลิงก์|payment link/i.test(l))
+            .join('\n')
+            .trim();
+          finalReply = [
+            finalReply,
+            '',
+            th ? `ก่อนชำระเงิน รบกวนแจ้ง${names.join(' และ ')}ด้วยนะครับ 🙏` : `Before payment, please send us your ${names.join(' and ')}.`,
+          ].join('\n').trim();
+        }
+
+        if (booking && missingInfo.length === 0) {
           log.info('booking.confirmed', {
             userId, date: booking.date, time: booking.time,
             pickup: booking.pickup, dropoff: booking.dropoff,
@@ -181,10 +219,19 @@ export async function POST(req: Request) {
                 footer = '📝 กรอกชื่อและเบอร์โทรในหน้าชำระเงินด้วยนะครับ';
                 log.info('stripe.payment_link_used', { userId, ref, amount });
               } else {
+                // ลิงก์ที่สร้างเอง: เก็บรายละเอียดจอง (เบอร์/เที่ยวบิน/รหัสอ้างอิง) ไว้ใน Redis ด้วย แล้วผูกกับ Stripe ผ่าน client_reference_id
+                // Redis ล่ม → ยังสร้างลิงก์ได้ (ข้อมูลทั้งหมดอยู่ใน metadata ของ session)
+                const ref = newBookingRef();
+                try {
+                  await savePendingBooking({ ...booking, amount: String(amount), ref });
+                } catch (err) {
+                  log.warn('booking.pending_save_failed', { userId, ref, err: (err as Error).message });
+                }
                 paymentUrl = await createCheckoutSession({
                   amount, date: booking.date, time: booking.time,
                   pickup: booking.pickup, dropoff: booking.dropoff,
                   pax: booking.pax, lineUserId: userId,
+                  ref, phone: booking.phone, flight: booking.flight,
                 });
                 footer = '⏱ ลิงก์หมดอายุใน 1 ชั่วโมง';
                 log.info('stripe.link_created', { userId, amount });

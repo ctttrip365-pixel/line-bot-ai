@@ -1,0 +1,70 @@
+// ============================================================
+// handleLegacyCreate_ เวอร์ชัน v3 — วางแทนฟังก์ชัน handleLegacyCreate_ เดิมใน Apps Script (script.google.com)
+// แล้ว Deploy → Manage deployments → Edit → New version (URL เดิม ไม่ต้องเปลี่ยน env)
+//
+// ต่างจาก v2 อย่างเดียว (8 ต.ค. 2026): รับฟิลด์ flight (หมายเลขเที่ยวบิน ที่บอทขอจากลูกค้าก่อนจ่ายเงินเมื่อรับจากสนามบิน)
+// แล้วเขียนบรรทัด "Flight No: ..." ต่อท้าย "Booking No:" ใน description (ไม่มีเที่ยวบิน = ไม่มีบรรทัดนี้)
+// ชื่อ event / รูปแบบ description เดิม / สี / ระยะเวลา ไม่เปลี่ยน — make-bill และระบบคนขับอ่านเหมือนเดิม
+// ============================================================
+function handleLegacyCreate_(data) {
+  try {
+    var date = data.date;
+    var time = data.time;
+    var pickup = data.pickup;
+    var dropoff = data.dropoff;
+    var pax = data.pax || '1';
+    var userId = data.userId || 'LINE User';
+
+    var parts = date.split('/');
+    var timeParts = time.split(':');
+    var day = parseInt(parts[0]);
+    var month = parseInt(parts[1]) - 1;
+    var year = parseInt(parts[2]);
+    var hour = parseInt(timeParts[0]);
+    var minute = parseInt(timeParts[1] || '0');
+
+    var startTime = new Date(year, month, day, hour, minute);
+    var endTime = new Date(startTime.getTime() + 90 * 60 * 1000);
+
+    var ref = data.bookingRef || 'LINE';
+    var guest = data.guestName || 'ลูกค้า LINE';
+    var phone = data.phone || '';
+    var flight = data.flight || '';
+    var hhmm = ('0' + hour).slice(-2) + ':' + ('0' + minute).slice(-2);
+
+    var title = [ref, guest, pickup + '→' + dropoff, pax + ' Pax', hhmm, phone]
+      .filter(function (x) { return x !== ''; })
+      .join(' | ');
+
+    var description = [
+      'Guest: ' + guest,
+      'From: ' + pickup,
+      'To: ' + dropoff,
+      'Pax: ' + pax,
+      'Contact: ' + (phone || 'LINE User ' + userId),
+      'Boat/Flight time: ' + hhmm,
+      'Booking No: ' + ref,
+      (flight ? 'Flight No: ' + flight : ''),
+      '',
+      'จองผ่าน LINE Bot อัตโนมัติ (ชำระเงินแล้ว)'
+    ].join('\n');
+
+    var calendar = CalendarApp.getCalendarById(CALENDAR_ID);
+    var event = calendar.createEvent(title, startTime, endTime, {
+      description: description,
+      color: CalendarApp.EventColor.ORANGE
+    });
+
+    Logger.log('Event created: ' + event.getId());
+
+    return ContentService
+      .createTextOutput(JSON.stringify({ success: true, eventId: event.getId() }))
+      .setMimeType(ContentService.MimeType.JSON);
+
+  } catch (err) {
+    Logger.log('Error: ' + err.message);
+    return ContentService
+      .createTextOutput(JSON.stringify({ success: false, error: err.message }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}

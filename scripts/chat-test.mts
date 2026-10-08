@@ -87,7 +87,7 @@ const menuCases: { name: string; msg: string; history?: { role: 'user' | 'model'
   { name: 'M9 ไม่รู้จักต้นทาง (ถามย่านก่อน ห้ามส่งตาราง)', msg: 'ขอราคารถจากโรงแรมซันไชน์พาราไดซ์' },
   { name: 'M10 ตอบรับข้อเสนอทัวร์ (ควรค้น FAQ เรื่องทัวร์ แล้วตอบจาก FAQ)', msg: 'สนใจทัวร์ครับ ขอรายละเอียด',
     history: [{ role: 'user', text: 'สอบถามราคารถ สนามบินกระบี่' }, { role: 'model', text: 'ราคาตามนี้ครับ ... 🏝️ นอกจากรถรับ-ส่ง CTT ยังมีทัวร์วันเดย์ด้วยนะครับ สนใจให้ส่งรายละเอียดและราคาไหมครับ?' }] },
-  { name: 'M11 โรงแรม De Malee Krabi (คลองแห้ง=ราคาอ่าวนาง) 2 คน ครบทุกข้อมูล → สรุปจองราคา 600 ไม่ต้องรอแชมป์ ไม่มีตาราง', msg: 'จองรถสนามบินกระบี่ ไป De Malee Krabi 2 คน 23/10/2026 13:00' },
+  { name: 'M11 โรงแรม De Malee Krabi (คลองแห้ง=ราคาอ่าวนาง) 2 คน ครบทุกข้อมูล → สรุปจองราคา 600 ไม่ต้องรอแชมป์ ไม่มีตาราง', msg: 'จองรถสนามบินกระบี่ ไป De Malee Krabi 2 คน 23/10/2026 13:00 เบอร์ 0812345678 เที่ยวบิน FD3305' },
   { name: 'M12 เคยส่งตาราง+ทัวร์แล้ว ลูกค้าบอกโรงแรมไม่รู้จัก → ห้ามส่งตารางซ้ำ ถามย่าน/จำนวนคน',  msg: 'โรงแรมซันไชน์พาราไดซ์ 2 คน',
     history: [{ role: 'user', text: 'สอบถามราคารถ สนามบินกระบี่' }, { role: 'model', text: 'ราคาตามนี้ครับ\n\n🚐 ราคารถรับ-ส่งจาก สนามบินกระบี่ ...\n\n🏝️ นอกจากรถรับ-ส่ง CTT ยังมีทัวร์วันเดย์ด้วยนะครับ' }] },
 ];
@@ -140,8 +140,9 @@ const salesScenarios: Scenario[] = [
       { say: '2คน', check: all(noMenu, noSystemNotFound, noPriceYet, noTour) }, // ยังไม่รู้วัน/เวลา และลูกค้าไม่ได้ถามราคา → ถามวัน/เวลาต่อ ไม่บอกราคา
       { say: 'มันอยู่อ่าวนางหรือคลองแห้งครับ', check: all(noMenu, noSystemNotFound, noPriceYet) },
       { say: '23ตค26', check: all(noMenu, noSystemNotFound, noPriceYet) },
-      { say: '1300', check: all(noMenu, noSystemNotFound, noEmojiConfirm, (r) => need(hasPrice(r, PRICE2), `สรุปจองต้องมีราคา ${fmtP(PRICE2)}`), (r) => need(/ยืนยัน|confirm/i.test(r), 'ต้องชวนพิมพ์ ยืนยัน')) },
-      { say: 'โอเค', check: (r) => need(isBooking(r), 'ต้องออก [BOOKING_CONFIRMED] เมื่อลูกค้าพิมพ์ "โอเค"').concat(noSystemNotFound(r)) },
+      { say: '1300', check: all(noMenu, noSystemNotFound, noSummaryYet, (r) => need(/เบอร์|เที่ยวบิน|phone|flight/i.test(r), 'ต้องขอเบอร์โทร + หมายเลขเที่ยวบินก่อนสรุป')) },
+      { say: 'เบอร์ 0812345678 เที่ยวบิน FD3305', check: all(noMenu, noSystemNotFound, noEmojiConfirm, (r) => need(hasPrice(r, PRICE2), `สรุปจองต้องมีราคา ${fmtP(PRICE2)}`), (r) => need(r.includes('0812345678') && /FD\s?3305/.test(r), 'สรุปต้องแสดงเบอร์และเที่ยวบิน'), (r) => need(/ยืนยัน|confirm/i.test(r), 'ต้องชวนพิมพ์ ยืนยัน')) },
+      { say: 'โอเค', check: (r) => need(isBooking(r) && /phone=\s*0812345678/.test(r) && /flight=\s*FD\s?3305/.test(r), 'ต้องออก [BOOKING_CONFIRMED] พร้อม phone= และ flight= เมื่อลูกค้าพิมพ์ "โอเค"').concat(noSystemNotFound(r)) },
     ],
     checkAll: (rs) => [
       ...(countMenus(rs) <= 1 ? [] : [`ตารางราคาขึ้น ${countMenus(rs)} ครั้ง (ควรไม่เกิน 1)`]),
@@ -152,7 +153,7 @@ const salesScenarios: Scenario[] = [
     id: 'S2',
     name: 'S2 ลูกค้าส่งครบในข้อความเดียว → สรุปจองพร้อมราคาเลย ไม่ถามซ้ำ ไม่ส่งตาราง',
     turns: [
-      { say: 'จองรถสนามบินกระบี่ ไป De Malee Krabi 2 คน 23/10/2026 13:00', check: all(noMenu, noSystemNotFound, noEmojiConfirm, (r) => need(hasPrice(r, PRICE2), `ต้องมีราคา ${fmtP(PRICE2)}`)) },
+      { say: 'จองรถสนามบินกระบี่ ไป De Malee Krabi 2 คน 23/10/2026 13:00 เบอร์ 0812345678 เที่ยวบิน FD3305', check: all(noMenu, noSystemNotFound, noEmojiConfirm, (r) => need(hasPrice(r, PRICE2), `ต้องมีราคา ${fmtP(PRICE2)}`)) },
       { say: 'ตกลง', check: (r) => need(isBooking(r), 'ต้องออก [BOOKING_CONFIRMED] เมื่อพิมพ์ "ตกลง"') },
     ],
   },
@@ -175,7 +176,7 @@ const salesScenarios: Scenario[] = [
     turns: [
       { say: 'สนามบินกระบี่ ไป โรงแรมซันไชน์พาราไดซ์ 2 คน', check: all(noMenu, noSystemNotFound, noPriceYet) },
       { say: 'อยู่อ่าวนางครับ', check: all(noMenu, noSystemNotFound, noPriceYet) }, // ยังไม่รู้วัน/เวลา → ถามต่อ
-      { say: '23/10/2026 13:00', check: all(noMenu, noSystemNotFound, (r) => need(hasPrice(r, PRICE2), `สรุปจองต้องมีราคา ${fmtP(PRICE2)} (ตามย่านอ่าวนาง)`)) },
+      { say: '23/10/2026 13:00 เบอร์ 0812345678 เที่ยวบิน FD3305', check: all(noMenu, noSystemNotFound, (r) => need(hasPrice(r, PRICE2), `สรุปจองต้องมีราคา ${fmtP(PRICE2)} (ตามย่านอ่าวนาง)`)) },
     ],
     checkAll: (rs) => (countMenus(rs) === 0 ? [] : ['ไม่ควรส่งตารางเลย']),
   },
@@ -200,7 +201,7 @@ const salesScenarios: Scenario[] = [
     name: 'S7 อังกฤษ: De Malee Krabi + ยืนยันด้วยคำว่า confirm → ตอบอังกฤษ ราคาถูก ไม่มี ✅ บังคับ',
     turns: [
       { say: 'Hi, I need a transfer from Krabi Airport to De Malee Krabi hotel', check: all(noMenu, noPriceYet) },
-      { say: '2 people, 23 Oct 2026, 1pm', check: all(noMenu, noEmojiConfirm, (r) => need(hasPrice(r, PRICE2), `ต้องมีราคา ${fmtP(PRICE2)}`), (r) => need(!/[฀-๿]/.test(r), 'ตอบมีตัวอักษรไทยทั้งที่ลูกค้าพิมพ์อังกฤษ')) },
+      { say: '2 people, 23 Oct 2026, 1pm, phone 0812345678, flight FD3305', check: all(noMenu, noEmojiConfirm, (r) => need(hasPrice(r, PRICE2), `ต้องมีราคา ${fmtP(PRICE2)}`), (r) => need(!/[฀-๿]/.test(r), 'ตอบมีตัวอักษรไทยทั้งที่ลูกค้าพิมพ์อังกฤษ')) },
       { say: 'confirm', check: (r) => need(isBooking(r), 'ต้องออก [BOOKING_CONFIRMED] เมื่อพิมพ์ confirm') },
     ],
   },
@@ -240,14 +241,14 @@ const salesScenarios: Scenario[] = [
     id: 'S13',
     name: 'S13 นับจำนวนคนรวยตัวลูกค้า ("อีก 6 คน" = 7) → สรุป/ถามยืนยันเป็น 7',
     turns: [
-      { say: 'ผมกับเพื่อนร่วมงานอีก 6 คน จะนั่งจากสนามบินกระบี่ไปอ่าวนาง 23/10/2026 13:00', check: (r) => need(/7/.test(r) || /รวม.{0,12}(กี่|ทั้งหมด)/.test(r), 'ต้องนับเป็น 7 คน (หรือถามยืนยันจำนวนรวม) ไม่ใช่ 6') },
+      { say: 'ผมกับเพื่อนร่วมงานอีก 6 คน จะนั่งจากสนามบินกระบี่ไปอ่าวนาง 23/10/2026 13:00 เบอร์ 0812345678 เที่ยวบิน FD3305', check: (r) => need(/7/.test(r) || /รวม.{0,12}(กี่|ทั้งหมด)/.test(r), 'ต้องนับเป็น 7 คน (หรือถามยืนยันจำนวนรวม) ไม่ใช่ 6') },
     ],
   },
   {
     id: 'S14',
     name: 'S14 ลูกค้าขอโอนบัญชี → ครบข้อมูลก่อน, ให้บัญชีตรงตัวอักษร, ขอสลิป, ส่งต่อพี่แชมป์, ไม่ออก BOOKING_CONFIRMED',
     turns: [
-      { say: 'ขอจองสนามบินกระบี่ไปอ่าวนาง 2 คน 23/10/2026 13:00 ผมขอโอนเข้าบัญชีเลยนะ ไม่เอาลิงก์', check: (r) => [
+      { say: 'ขอจองสนามบินกระบี่ไปอ่าวนาง 2 คน 23/10/2026 13:00 เบอร์ 0812345678 เที่ยวบิน FD3305 ผมขอโอนเข้าบัญชีเลยนะ ไม่เอาลิงก์', check: (r) => [
         ...need(r.includes('000-0-00000-0'), 'ต้องให้เลขบัญชีตรงตัวอักษร'),
         ...need(/สลิป/.test(r), 'ต้องขอให้ส่งสลิป'),
         ...need(r.includes('[HANDOFF]'), 'ต้องส่งต่อพี่แชมป์ตรวจสลิป ([HANDOFF])'),
@@ -260,7 +261,7 @@ const salesScenarios: Scenario[] = [
     id: 'S15',
     name: 'S15 ไม่เปิดเผยเลขบัญชีเองถ้าลูกค้าไม่ได้ขอโอน (ปกติใช้ลิงก์) และไม่แต่งบัญชีอื่น',
     turns: [
-      { say: 'จองสนามบินกระบี่ไปอ่าวนาง 2 คน 23/10/2026 13:00', check: (r) => (r.includes('000-0-00000-0') ? ['ให้เลขบัญชีทั้งที่ลูกค้าไม่ได้ขอโอน'] : []) },
+      { say: 'จองสนามบินกระบี่ไปอ่าวนาง 2 คน 23/10/2026 13:00 เบอร์ 0812345678 เที่ยวบิน FD3305', check: (r) => (r.includes('000-0-00000-0') ? ['ให้เลขบัญชีทั้งที่ลูกค้าไม่ได้ขอโอน'] : []) },
       { say: 'โอนเข้า PayPal หรือบัญชีของพี่ชายได้ไหม', check: (r) => (/paypal.{0,30}(ได้|รับ)(?!.{0,6}ไม่)/i.test(r) && !/ไม่/.test(r) ? ['รับ PayPal/บัญชีอื่น'] : []) },
     ],
   },
@@ -291,10 +292,40 @@ const salesScenarios: Scenario[] = [
         ...need(hasPrice(r, PRICE5 * 2), `ต้องมีราคารถตู้ 2 คัน = ${fmtP(PRICE5 * 2)}`),
         ...(isBooking(r) ? ['ออก [BOOKING_CONFIRMED] กับกลุ่มเกิน 9 คน'] : []),
       ] },
-      { say: 'เอาแบบรถตู้สองคัน วันที่ 23/10/2026 13:00 ส่งที่ De Malee Krabi', check: (r) => [
+      { say: 'เอาแบบรถตู้สองคัน วันที่ 23/10/2026 13:00 ส่งที่ De Malee Krabi เบอร์ 0812345678 เที่ยวบิน FD3305', check: (r) => [
         ...need(r.includes('[HANDOFF]'), 'เลือกแล้วต้องส่งต่อพี่แชมป์จัดรถ ([HANDOFF])'),
         ...(isBooking(r) ? ['ออก [BOOKING_CONFIRMED] กับกลุ่มเกิน 9 คน'] : []),
       ] },
+    ],
+  },
+  {
+    id: 'S19',
+    name: 'S19 จองรับจากสนามบิน: ขอเบอร์โทร + หมายเลขเที่ยวบินก่อนสรุป/จ่ายเงินทุกครั้ง; ไม่ออก booking จนกว่าจะได้ครบ',
+    turns: [
+      { say: 'จองรถสนามบินกระบี่ ไปอ่าวนาง 2 คน 23/10/2026 13:00', check: all(noSummaryYet, (r) => [...need(/เบอร์/.test(r), 'ต้องขอเบอร์โทร'), ...need(/เที่ยวบิน|flight/i.test(r), 'ต้องขอหมายเลขเที่ยวบิน (รับจากสนามบิน)'), ...(isBooking(r) ? ['ออก booking ก่อนได้เบอร์/เที่ยวบิน'] : [])]) },
+      { say: 'FD3305', check: (r) => [...need(/เบอร์/.test(r), 'ยังขาดเบอร์โทร ต้องถามต่อ'), ...(isBooking(r) ? ['ออก booking ทั้งที่ยังไม่มีเบอร์โทร'] : [])] },
+      { say: '0812345678', check: (r) => need(r.includes('0812345678') && /FD\s?3305/.test(r) && hasPrice(r, PRICE2), 'สรุปต้องมีเบอร์ เที่ยวบิน และราคา') },
+    ],
+  },
+  {
+    id: 'S20',
+    name: 'S20 ส่งจากโรงแรมไปสนามบิน: ขอเบอร์โทร แต่ไม่ต้องขอหมายเลขเที่ยวบิน',
+    turns: [
+      { say: 'จองรถจาก De Malee Krabi ไปสนามบินกระบี่ 2 คน 23/10/2026 10:00', check: all(noSummaryYet, (r) => [...need(/เบอร์/.test(r), 'ต้องขอเบอร์โทร'), ...(/เที่ยวบิน|flight/i.test(r) ? ['ไม่ควรขอเที่ยวบิน (ส่งสนามบิน ไม่ใช่รับ)'] : [])]) },
+    ],
+  },
+  {
+    id: 'S21',
+    name: 'S21 ค่าบริการเสริม/หน้างาน (ตอบจาก FAQ ตามตัวเลขที่แชมป์ให้ ไม่แต่งเพิ่ม)',
+    turns: [
+      { say: 'ขอแวะทานข้าวระหว่างทางได้ไหม มีค่าใช้จ่ายไหม', check: (r) => need(r.includes('100') && /15\s*นาที/.test(r), 'แวะฟรี 15 นาที เกินแล้วค่าแวะ 100 (+ชั่วโมงละ 100)') },
+      { say: 'เครื่องผมดีเลย์ คุณต้องรอผมนานไหม คิดค่ารอยังไง', check: (r) => need(/30\s*นาที/.test(r) && r.includes('100'), 'รอฟรี 30 นาที หลังจากนั้นชั่วโมงละ 100') },
+      { say: 'ต้องการเก้าอี้เด็ก 3 ตัว ต้องจ่ายเพิ่มไหม', check: (r) => need(/ฟรี/.test(r) && /2/.test(r) && r.includes('100') && /ครั้งเดียว|รวม/.test(r), 'ฟรี 2 ตัว เกินคิดเพิ่ม 100 ครั้งเดียวรวม') },
+      { say: 'ต้องการล่ามด้วย คิดเท่าไหร่', check: (r) => need(r.includes('600'), 'ล่าม 600 บาทต่อรอบ') },
+      { say: 'ผมรออยู่ที่สนามบินกระบี่ ต้องไปรอตรงไหน', check: (r) => need(/15/.test(r), 'จุดนัดรับ ประตูทาง 15') },
+      { say: 'ขอเบอร์คนขับหน่อย', check: (r) => need(r.includes('94 269 4651') || r.includes('942694651'), 'ให้เบอร์ +66 94 269 4651') },
+      { say: 'ผมมีผู้โดยสารที่เดินไม่ได้ ต้องใช้รถเข็น', check: (r) => need(/สายการบิน/.test(r) && /โรงแรม/.test(r), 'สายการบินช่วยจนถึงรถตู้ หลังจากนั้นขึ้นกับโรงแรม') },
+      { say: 'ขอดูรูปรถหน่อย', check: (r) => need(r.includes('[HANDOFF]') || /ส่งรูป/.test(r), 'พี่แชมป์จะส่งรูปรถให้ (ส่งต่อ)') },
     ],
   },
   {
@@ -302,8 +333,8 @@ const salesScenarios: Scenario[] = [
     name: 'S8 ลูกค้าตอบรับทัวร์หลังเสนอ → ตอบรายละเอียดทัวร์จาก FAQ แล้วพากลับมาจองรถ ไม่ส่งตารางหรือเสนอทัวร์ซ้ำ',
     turns: [
       { say: 'สนามบินกระบี่ไปอ่าวนาง 2 คน ราคาเท่าไหร่', check: all(noMenu, noSummaryYet, noChampSummarize, (r) => need(hasPrice(r, PRICE2), `ต้องตอบราคา ${fmtP(PRICE2)}`)) },
-      { say: 'ทัวร์ 4 เกาะราคาเท่าไหร่', check: all(noMenu, noTour) },
-      { say: 'โอเค งั้นขอจองรถรับสนามบินก่อน วันที่ 23/10/2026 เวลา 13:00 ไปส่งที่ De Malee Krabi', check: all(noMenu, noTour, noEmojiConfirm) },
+      { say: 'ทัวร์ 4 เกาะราคาเท่าไหร่', check: all(noMenu, noTour, (r) => need(r.includes('800'), 'ต้องตอบราคาทัวร์ 4 เกาะ 800 บาท/คน จาก FAQ'), (r) => (r.includes('[HANDOFF]') ? ['ไม่ควรส่งต่อ ราคามีใน FAQ'] : [])) },
+      { say: 'โอเค งั้นขอจองรถรับสนามบินก่อน วันที่ 23/10/2026 เวลา 13:00 ไปส่งที่ De Malee Krabi เบอร์ 0812345678 เที่ยวบิน FD3305', check: all(noMenu, noTour, noEmojiConfirm) },
     ],
     checkAll: (rs) => (countTours(rs) <= 1 ? [] : [`ข้อเสนอทัวร์ขึ้น ${countTours(rs)} ครั้ง (ควรไม่เกิน 1)`]),
   },
@@ -312,11 +343,11 @@ const salesScenarios: Scenario[] = [
 // คำยืนยันหลายแบบ: ประวัติจบที่สรุปการจอง (ข้อความสรุปเป็นแบบที่บอทใช้จริง) แล้วลูกค้าพิมพ์ทีละคำ ต้องได้ [BOOKING_CONFIRMED] ทุกคำ
 const confirmWords = ['ยืนยัน', 'ยืนยันครับ', 'โอเค', 'โอเคครับ', 'ตกลง', 'ตกลงค่ะ', 'ได้เลย', 'จองเลย', 'ok', 'yes', '✅'];
 const summaryText =
-  'สรุปการจองนะครับ 🚐\n📅 วันที่: 23/10/2026 เวลา 13:00 น.\n📍 รับที่: สนามบินกระบี่\n📍 ส่งที่: De Malee Krabi\n👥 จำนวน: 2 คน\n💰 ราคา: ' +
+  'สรุปการจองนะครับ 🚐\n📅 วันที่: 23/10/2026 เวลา 13:00 น.\n📍 รับที่: สนามบินกระบี่\n📍 ส่งที่: De Malee Krabi\n👥 จำนวน: 2 คน\n📞 เบอร์ติดต่อ: 0812345678\n✈️ เที่ยวบิน: FD3305\n💰 ราคา: ' +
   fmtP(PRICE2) +
   ' บาท\nพิมพ์ ยืนยัน (หรือ โอเค / ตกลง) เพื่อรับลิงก์ชำระเงินครับ\nหรือ แก้ไข ถ้าต้องการเปลี่ยนข้อมูล';
 const confirmHistory = [
-  { role: 'user' as const, text: 'จองรถสนามบินกระบี่ ไป De Malee Krabi 2 คน 23/10/2026 13:00' },
+  { role: 'user' as const, text: 'จองรถสนามบินกระบี่ ไป De Malee Krabi 2 คน 23/10/2026 13:00 เบอร์ 0812345678 เที่ยวบิน FD3305' },
   { role: 'model' as const, text: summaryText },
 ];
 
