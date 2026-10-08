@@ -15,6 +15,18 @@ const FETCH_TIMEOUT_MS = 5000;
 const MAX_PAX_FOR_PRICE = 8;
 const ALLOW_REVERSE_PRICE = true;
 
+// ชื่อสถานที่ → zone ที่แชมป์ยืนยันแล้ว (8 ต.ค. 2026): โรงแรมย่านคลองแห้ง อ่าวนาง ใช้ราคาอ่าวนาง ไม่ต้องรอแชมป์ยืนยัน
+// ควรเพิ่มชื่อเหล่านี้ในแท็บ Aliases ของชีตราคาด้วย (ชีตมาก่อนเสมอ) — รายการนี้เป็นตัวสำรองระหว่างนั้น
+const EXTRA_ALIASES: Array<[string, string]> = [
+  ['De Malee Krabi', 'Ao Nang'],
+  ['De Malee', 'Ao Nang'],
+  ['คลองแห้ง', 'Ao Nang'],
+  ['Klong Haeng', 'Ao Nang'],
+  ['Khlong Haeng', 'Ao Nang'],
+  ['Klong Hang', 'Ao Nang'],
+  ['Khlong Hang', 'Ao Nang'],
+];
+
 interface PriceRow {
   from: string; // zone name (ตามที่เขียนใน Sheet)
   to: string;
@@ -156,13 +168,20 @@ function buildData(priceRows: string[][], aliasRows: string[][]): PriceData {
   }
 
   const aliases = new Map<string, string[]>();
-  for (const r of aliasRows.slice(1)) {
-    const [name, zone] = r.map((c) => (c ?? '').trim());
-    if (!name || !zone) continue;
+  const addAlias = (name: string, zone: string) => {
     const key = norm(name);
     const list = aliases.get(key) ?? [];
     if (!list.includes(zone)) list.push(zone);
     aliases.set(key, list);
+  };
+  for (const r of aliasRows.slice(1)) {
+    const [name, zone] = r.map((c) => (c ?? '').trim());
+    if (!name || !zone) continue;
+    addAlias(name, zone);
+  }
+  // alias ที่แชมป์สั่งเพิ่มในโค้ด (ชีตมาก่อนเสมอ — ถ้าชีตมีชื่อเดียวกัน ใช้ zone ของชีตก่อน)
+  for (const [name, zone] of EXTRA_ALIASES) {
+    if (zoneNames.has(norm(zone))) addAlias(name, zone);
   }
 
   return { rows, rowIndex, aliases, zoneNames, byFrom };
@@ -262,7 +281,7 @@ export async function lookupPrice(origin: string, destination: string, pax: numb
     status: 'not_found',
     message:
       fromZones.length === 0 || toZones.length === 0
-        ? 'ไม่รู้จักสถานที่นี้ ให้ถามลูกค้าว่าอยู่ย่านไหน (เช่น อ่าวนาง ภูเก็ต เขาหลัก) ถ้ายังไม่ทราบให้แจ้งว่าพี่แชมป์จะเช็คราคาให้'
+        ? 'ไม่รู้จักสถานที่นี้ ให้ถามลูกค้าสั้นๆ ว่าอยู่ย่านไหน (เช่น อ่าวนาง คลองแห้ง ภูเก็ต เขาหลัก) แล้วเรียก lookup_price ใหม่โดยใช้ชื่อย่านนั้นเป็นปลายทาง (ราคาตามย่านของสถานที่) ถ้าลูกค้าไม่ทราบย่านจริงๆ จึงแจ้งว่าพี่แชมป์จะเช็คราคาให้'
         : 'ยังไม่มีราคาเส้นทางนี้ในตาราง ห้ามเดาราคา ให้แจ้งว่าพี่แชมป์จะเช็คราคาให้และส่งต่อแชมป์',
   };
 }
@@ -272,7 +291,7 @@ export async function lookupPrice(origin: string, destination: string, pax: numb
 // สร้างโดยโค้ด ไม่ให้ Gemini พิมพ์ตัวเลขเอง — ตัวเลขมาจากชีต Prices ปัจจุบันเสมอ
 // ============================================================
 
-type Lang = 'thai' | 'english' | 'other';
+export type Lang = 'thai' | 'english' | 'other';
 
 // ชื่อที่แสดงให้ลูกค้า (ไทย/อังกฤษ) และกลุ่ม — zone ที่ไม่อยู่ในรายการนี้จะแสดงตามชื่อในชีต ในกลุ่ม "อื่นๆ"
 // เพิ่ม zone ใหม่ในชีตแล้วยังใช้ได้ทันที (แค่ชื่อแสดงเป็นอังกฤษจนกว่าจะเพิ่มที่นี่)
@@ -310,6 +329,25 @@ const GROUP_TITLES: Record<Lang, [string, string, string]> = {
 
 const fmt = (n: number) => n.toLocaleString('en-US');
 
+// ข้อเสนอทัวร์วันเดย์ — ขึ้นครั้งเดียวต่อบทสนทนา (แชมป์สั่ง 8 ต.ค. 2026) ใช้ 🏝️ เป็นตัวจับว่าเคยเสนอไปแล้ว (ดู offersAlreadyMade)
+const TOUR_OFFER_MARK = '🏝️';
+const MENU_HEADER_MARKS = ['🚐 ราคารถรับ-ส่งจาก', '🚐 Van transfer prices from'];
+
+export function tourOfferText(lang: Lang): string {
+  return lang === 'thai'
+    ? `${TOUR_OFFER_MARK} นอกจากรถรับ-ส่ง CTT ยังมีทัวร์วันเดย์ด้วยนะครับ เช่น ทัวร์ 4 เกาะ เกาะพีพี เกาะห้อง สนใจให้ส่งรายละเอียดและราคาไหมครับ?`
+    : `${TOUR_OFFER_MARK} Besides transfers, we also offer day tours — e.g. 4-Island, Phi Phi Island and Hong Island. Would you like the details and prices?`;
+}
+
+/** ดูจากข้อความที่บอทเคยส่งในบทสนทนานี้ (history 48 ชม.) ว่าเคยส่งตารางราคา / เสนอทัวร์ไปแล้วหรือยัง */
+export function offersAlreadyMade(history: Array<{ role: string; text: string }>): { menu: boolean; tour: boolean } {
+  const modelTexts = history.filter((m) => m.role === 'model').map((m) => m.text);
+  return {
+    menu: modelTexts.some((t) => MENU_HEADER_MARKS.some((h) => t.includes(h))),
+    tour: modelTexts.some((t) => t.includes(TOUR_OFFER_MARK)),
+  };
+}
+
 export type PriceMenuResult =
   | { status: 'ok'; originZone: string; destinations: string[]; text: string }
   | { status: 'not_found' };
@@ -319,7 +357,7 @@ export type PriceMenuResult =
  * pax: ถ้ารู้จำนวนคน (1-8) แสดงราคาช่วงนั้นช่วงเดียว ไม่งั้นแสดงทั้ง 1-3 / 4-8 คน
  * ท้ายตารางมีคำถามปลายทาง + เสนอทัวร์วันเดย์ (ไม่ใส่ราคาทัวร์ ราคาทัวร์ให้ตอบจาก FAQ เมื่อลูกค้าสนใจ)
  */
-export async function priceMenu(origin: string, lang: Lang, pax?: number): Promise<PriceMenuResult> {
+export async function priceMenu(origin: string, lang: Lang, pax?: number, opts: { includeTourOffer?: boolean } = {}): Promise<PriceMenuResult> {
   const data = await loadPrices();
   let zone = '';
   let rows: PriceRow[] = [];
@@ -366,10 +404,7 @@ export async function priceMenu(origin: string, lang: Lang, pax?: number): Promi
     thai
       ? 'ต้องการไปที่ไหน แจ้งชื่อสถานที่หรือโรงแรมได้เลยครับ (ถ้าไม่มีในรายการ พี่แชมป์จะเช็คราคาให้)'
       : 'Where would you like to go? Just tell us the place or hotel name (if it is not listed, we will check the price for you).',
-    '',
-    thai
-      ? '🏝️ นอกจากรถรับ-ส่ง CTT ยังมีทัวร์วันเดย์ด้วยนะครับ เช่น ทัวร์ 4 เกาะ เกาะพีพี เกาะห้อง สนใจให้ส่งรายละเอียดและราคาไหมครับ?'
-      : '🏝️ Besides transfers, we also offer day tours — e.g. 4-Island, Phi Phi Island and Hong Island. Would you like the details and prices?'
+    ...(opts.includeTourOffer === false ? [] : ['', tourOfferText(lang)])
   );
 
   return { status: 'ok', originZone: zone, destinations: rows.map((r) => label(r.to)), text: lines.join('\n') };

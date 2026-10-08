@@ -3,7 +3,7 @@
 
 import { GoogleGenAI, Type } from '@google/genai';
 import type { Content } from '@google/genai';
-import { lookupPrice, priceMenu } from './prices';
+import { lookupPrice, priceMenu, offersAlreadyMade, tourOfferText } from './prices';
 import { searchFaq, faqCategories } from './faq';
 import { log } from './log';
 import { buildSystemPrompt } from './prompts';
@@ -73,6 +73,8 @@ export async function generateReply(
   // ภาษาตอบกำหนดจากโค้ด (ดูตัวอักษรในข้อความลูกค้า) ไม่ให้ Gemini เดา
   const lang = detectLanguage(userMessage, history);
   const fallbackReply = lang === 'thai' ? DEFAULT_REPLY : DEFAULT_REPLY_EN;
+  // ขึ้นขายครั้งเดียวต่อบทสนทนา: ตารางราคา/ข้อเสนอทัวร์ที่ส่งไปแล้วในประวัติ ห้ามส่งซ้ำ (แชมป์สั่ง 8 ต.ค. 2026)
+  const already = offersAlreadyMade(history);
   // รายชื่อหมวด FAQ (cache 60 วิ) ไว้ให้ Gemini เลือกหมวดตอนเรียก search_faq — โหลดไม่ได้ก็ไม่ล้ม (tool จะรายงาน error เอง)
   let categories = '';
   try {
@@ -128,7 +130,7 @@ export async function generateReply(
         {
           name: 'list_prices_from',
           description:
-            'รู้จุดรับแล้ว แต่ยังไม่รู้จุดส่ง (หรือจุดส่งไม่ชัด/ไม่มีราคา) → เรียกตัวนี้ ระบบจะแนบตารางราคาทุกปลายทางจากจุดรับนั้นให้ลูกค้าเอง พร้อมคำถามปลายทางและข้อเสนอทัวร์วันเดย์',
+            'รู้จุดรับแล้ว แต่ยังไม่รู้จุดส่ง (หรือจุดส่งไม่ชัด/ไม่มีราคา) → เรียกตัวนี้ ระบบจะแนบตารางราคาทุกปลายทางจากจุดรับนั้นให้ลูกค้าเอง (ใช้ได้ครั้งเดียวต่อบทสนทนา ห้ามเรียกถ้าลูกค้าบอกจุดส่งแล้ว)',
           parameters: {
             type: Type.OBJECT,
             properties: {
@@ -160,6 +162,13 @@ export async function generateReply(
   const MENU_NOTE =
     'ข้อมูลสำหรับคุณเท่านั้น (ห้ามเอ่ยถึงลูกค้า): ตารางราคาถูกแนบให้ลูกค้าแล้ว — เขียนเฉพาะประโยคนำสั้นๆ 1 ประโยค เช่น "ราคารถรับ-ส่งจากสนามบินกระบี่ตามนี้ครับ" ห้ามพิมพ์ราคาหรือรายการเส้นทางเอง ห้ามถามปลายทาง/จำนวนคนซ้ำ ห้ามเสนอทัวร์เอง ห้ามพูดถึงระบบหรือตาราง';
 
+  const MENU_ALREADY_SENT = {
+    status: 'menu_already_sent',
+    message:
+      'ส่งตารางราคาให้ลูกค้าไปแล้วในบทสนทนานี้ ห้ามส่งซ้ำ ห้ามเสนอทัวร์ซ้ำ — ถามเฉพาะข้อมูลที่ยังขาด (จุดส่ง/โรงแรม จำนวนคน วัน เวลา) หรือถ้ายังหาราคาเส้นทางไม่ได้ให้ถามย่านของสถานที่นั้น แล้วค่อยเรียก lookup_price ใหม่',
+  };
+  let priceQuoted: { price: number } | null = null;
+
   const MAX_TOOL_ROUNDS = 3;
   let response = await callModel(ai, contents, systemPrompt, tools);
 
@@ -179,7 +188,12 @@ export async function generateReply(
           } else if (call.name === 'list_prices_from') {
             const a = (call.args ?? {}) as { origin?: string; pax?: number | string };
             const paxN = a.pax !== undefined && a.pax !== null && String(a.pax) !== '' ? Number(a.pax) : undefined;
-            const m = await priceMenu(String(a.origin ?? ''), lang, paxN);
+            if (already.menu) {
+              result = MENU_ALREADY_SENT;
+              log.info('gemini.price_menu', { status: 'skipped_already_sent' });
+              return { functionResponse: { name: call.name, response: result } };
+            }
+            const m = await priceMenu(String(a.origin ?? ''), lang, paxN, { includeTourOffer: !already.tour });
             if (m.status === 'ok') {
               menuText = m.text;
               result = { status: 'menu_ready', origin_zone: m.originZone, destination_count: m.destinations.length, message: MENU_NOTE };
@@ -191,15 +205,10 @@ export async function generateReply(
             const args = (call.args ?? {}) as { origin?: string; destination?: string; pax?: number | string };
             result = { ...(await lookupPrice(String(args.origin ?? ''), String(args.destination ?? ''), Number(args.pax))) };
             log.info('gemini.price_lookup', { status: result.status });
-            // รู้ต้นทางแต่จับปลายทางไม่ได้/กำกวม → ส่งตารางราคาทุกปลายทางจากต้นทางนั้นแทน (ลดปัญหาจับชื่อปลายทางไม่ตรง)
-            if (result.status === 'not_found' || result.status === 'ambiguous') {
-              const paxN = Number(args.pax);
-              const m = await priceMenu(String(args.origin ?? ''), lang, Number.isFinite(paxN) ? paxN : undefined);
-              if (m.status === 'ok') {
-                menuText = m.text;
-                result = { status: 'menu_ready', reason: result.status, origin_zone: m.originZone, destination_count: m.destinations.length, message: MENU_NOTE };
-                log.info('gemini.price_menu', { status: 'fallback_from_lookup' });
-              }
+            // หาราคาไม่เจอ/กำกวม → ไม่แนบตารางเอง (แชมป์สั่ง 8 ต.ค. 2026: ขึ้นขายครั้งเดียว ถามรายละเอียดให้ครบก่อน)
+            // Gemini ถามย่านของสถานที่แล้วเรียก lookup_price ใหม่ — ตารางส่งได้เฉพาะผ่าน list_prices_from (ลูกค้าถามราคากว้างๆ) ครั้งเดียวต่อบทสนทนา
+            if (result.status === 'ok' && typeof result.price === 'number') {
+              priceQuoted = { price: result.price };
             }
           } else {
             throw new Error(`unknown tool ${call.name}`);
@@ -262,5 +271,16 @@ export async function generateReply(
     throw new Error('gemini_unusable_reply');
   }
 
-  return menuText ? `${reply}\n\n${menuText}` : reply;
+  if (menuText) return `${reply}\n\n${menuText}`;
+
+  // แจ้งราคาแล้ว (ราคาปรากฏในคำตอบ) และยังไม่เคยเสนอทัวร์ → เสนอทัวร์ 1 ครั้ง ต่อท้ายราคา แล้วหลังจากนั้นโฟกัสการจองรถ
+  // ไม่ต่อท้ายในข้อความที่เป็นการยืนยันจอง ([BOOKING_CONFIRMED]) เพราะลูกค้ากำลังจะจ่ายเงิน
+  const quoted = priceQuoted as { price: number } | null;
+  if (quoted && !already.tour && !reply.includes('[BOOKING_CONFIRMED]')) {
+    const p = quoted.price;
+    if (reply.includes(p.toLocaleString('en-US')) || reply.includes(String(p))) {
+      return `${reply}\n\n${tourOfferText(lang)}`;
+    }
+  }
+  return reply;
 }
