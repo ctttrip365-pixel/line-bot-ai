@@ -13,6 +13,11 @@ import type { ChatMessage } from './history';
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 const MODEL = 'gemini-2.5-flash';
 
+// ลูกค้าพิมพ์ถามราคาไหม (ไทย/อังกฤษ/ฮีบรู/จีน) — ใช้ตัดสินว่าจะบอกราคาก่อนเก็บวัน/เวลาได้หรือเปล่า
+function customerAskedPrice(userTexts: string[]): boolean {
+  return userTexts.some((t) => /ราคา|เท่าไหร่|เท่าไร|กี่บาท|ค่ารถ|ค่าบริการ|ค่าโดยสาร|price|how much|cost|fare|rate|quote|כמה|מחיר|多少|价格|价钱|费用|金额/i.test(t));
+}
+
 export const DEFAULT_REPLY_EN =
   'Sorry, let me check that for you — one moment please 🙏 Or you can contact Champ directly at +66 94 269 4651.';
 
@@ -75,6 +80,8 @@ export async function generateReply(
   const fallbackReply = lang === 'thai' ? DEFAULT_REPLY : DEFAULT_REPLY_EN;
   // ขึ้นขายครั้งเดียวต่อบทสนทนา: ตารางราคา/ข้อเสนอทัวร์ที่ส่งไปแล้วในประวัติ ห้ามส่งซ้ำ (แชมป์สั่ง 8 ต.ค. 2026)
   const already = offersAlreadyMade(history);
+  // ลูกค้า "ถามราคา" แล้วหรือยัง (ทั้งบทสนทนา) — ถ้ายังไม่เคยถาม แค่จะจอง ต้องถามวัน/เวลาให้ครบก่อนแล้วค่อยแจ้งราคาในสรุปจอง
+  const askedPrice = customerAskedPrice([...history.filter((m) => m.role === 'user').map((m) => m.text), userMessage]);
   // รายชื่อหมวด FAQ (cache 60 วิ) ไว้ให้ Gemini เลือกหมวดตอนเรียก search_faq — โหลดไม่ได้ก็ไม่ล้ม (tool จะรายงาน error เอง)
   let categories = '';
   try {
@@ -204,6 +211,11 @@ export async function generateReply(
           } else if (call.name === 'lookup_price') {
             const args = (call.args ?? {}) as { origin?: string; destination?: string; pax?: number | string };
             result = { ...(await lookupPrice(String(args.origin ?? ''), String(args.destination ?? ''), Number(args.pax))) };
+            if (result.status === 'ok' && !askedPrice) {
+              // ลูกค้ายังไม่เคยถามราคา → ห้ามบอกราคาตอนนี้ (ยังเก็บรายละเอียดไม่ครบ) ถามวัน/เวลาที่ขาดก่อน
+              result.instruction =
+                'ลูกค้ายังไม่ได้ถามราคา: ห้ามบอกราคาในรอบนี้เด็ดขาด (ห้ามพิมพ์ตัวเลขราคา) ถ้ายังไม่ครบวันที่+เวลารับ ให้ถามที่ขาดตรงๆ เช่น "ต้องการเดินทางวันที่เท่าไหร่ เวลากี่โมงครับ?" ถ้าครบแล้วจึงแสดงสรุปการจองพร้อมราคา';
+            }
             log.info('gemini.price_lookup', { status: result.status });
             // หาราคาไม่เจอ/กำกวม → ไม่แนบตารางเอง (แชมป์สั่ง 8 ต.ค. 2026: ขึ้นขายครั้งเดียว ถามรายละเอียดให้ครบก่อน)
             // Gemini ถามย่านของสถานที่แล้วเรียก lookup_price ใหม่ — ตารางส่งได้เฉพาะผ่าน list_prices_from (ลูกค้าถามราคากว้างๆ) ครั้งเดียวต่อบทสนทนา

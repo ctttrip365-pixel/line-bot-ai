@@ -90,7 +90,190 @@ const menuCases: { name: string; msg: string; history?: { role: 'user' | 'model'
     history: [{ role: 'user', text: 'สอบถามราคารถ สนามบินกระบี่' }, { role: 'model', text: 'ราคาตามนี้ครับ\n\n🚐 ราคารถรับ-ส่งจาก สนามบินกระบี่ ...\n\n🏝️ นอกจากรถรับ-ส่ง CTT ยังมีทัวร์วันเดย์ด้วยนะครับ' }] },
 ];
 
+// ---------- ชุดทดสอบ "ขายครั้งเดียว + ถามให้ครบก่อนแจ้งราคา" (หลายรอบสนทนา มีตรวจผ่าน/ไม่ผ่านให้เอง) ----------
+// รัน: npx tsx scripts/chat-test.mts sales        (ทุกสถานการณ์)
+//      npx tsx scripts/chat-test.mts sales S1     (เฉพาะสถานการณ์เดียว)
+// สถานการณ์ = ลูกค้าพิมพ์ทีละข้อความ ประวัติแชทต่อกันเหมือน LINE จริง (history ส่งกลับเข้า generateReply ทุกรอบ)
+// ตัวเลขราคาอ่านจากชีตราคาจริงตอนรัน (ไม่ hardcode) — ถ้าแชมป์แก้ราคา ชุดนี้ตามอัตโนมัติ
+type Turn = { say: string; check?: (reply: string) => string[] };
+type Scenario = { id: string; name: string; turns: Turn[]; checkAll?: (replies: string[]) => string[] };
+
+const { lookupPrice } = await import('../lib/prices');
+const p2 = await lookupPrice('สนามบินกระบี่', 'Ao Nang', 2);
+const p5 = await lookupPrice('สนามบินกระบี่', 'Ao Nang', 5);
+const PRICE2 = p2.status === 'ok' ? p2.price : NaN; // อ่าวนาง 1-3 คน
+const PRICE5 = p5.status === 'ok' ? p5.price : NaN; // อ่าวนาง 4-8 คน
+const fmtP = (n: number) => n.toLocaleString('en-US');
+const hasPrice = (r: string, n: number) => r.includes(fmtP(n)) || r.includes(String(n));
+
+// ตารางจริงขึ้นต้นด้วย 🚐 (ประโยคที่ Gemini เขียนเองไม่มี 🚐 จึงไม่ถูกนับเป็นตาราง)
+const MENU_RE = /🚐 ราคารถรับ-ส่งจาก|🚐 Van transfer prices from/g;
+const countMenus = (rs: string[]) => rs.reduce((n, r) => n + (r.match(MENU_RE)?.length ?? 0), 0);
+const countTours = (rs: string[]) => rs.reduce((n, r) => n + (r.split('🏝️').length - 1), 0);
+const noSystemNotFound = (r: string) => (/ระบบไม่พบ|ระบบไม่รู้จัก|system.*(cannot|could not|not) find/i.test(r) ? ['พูดว่า "ระบบไม่พบราคา"'] : []);
+const noMenu = (r: string) => (countMenus([r]) > 0 ? ['มีตารางราคาในรอบนี้ (ไม่ควร)'] : []);
+const noTour = (r: string) => (r.includes('🏝️') ? ['มีข้อเสนอทัวร์ในรอบนี้ (ไม่ควร)'] : []);
+const noPriceYet = (r: string) => (hasPrice(r, PRICE2) || hasPrice(r, PRICE5) ? [`บอกราคา ${fmtP(PRICE2)}/${fmtP(PRICE5)} ก่อนถามข้อมูลครบ`] : []);
+const noEmojiConfirm = (r: string) => (r.includes('✅') ? ['ยังใช้ ✅ ในข้อความของบอท (ควรใช้คำว่า ยืนยัน/โอเค/ตกลง)'] : []);
+const noPayLinkPromise = (r: string) => (/กำลังสร้างลิงก์|รับลิงก์ชำระเงิน|creating (the |a )?payment link/i.test(r) ? ['สัญญา/พูดถึงลิงก์จ่ายเงินทั้งที่ยังไม่มีราคา'] : []);
+const isBooking = (r: string) => r.includes('[BOOKING_CONFIRMED]');
+const need = (cond: boolean, msg: string) => (cond ? [] : [msg]);
+const all = (...fs: Array<(r: string) => string[]>) => (r: string) => fs.flatMap((f) => f(r));
+
+const salesScenarios: Scenario[] = [
+  {
+    id: 'S1',
+    name: 'S1 เล่นซ้ำแชทจริง 8 ต.ค. (De Malee Krabi) — ถามครบก่อนแจ้งราคา, ตาราง/ทัวร์ไม่ซ้ำ, ไม่รอแชมป์, ยืนยันด้วยคำพูด',
+    turns: [
+      { say: 'หวัดดี', check: all(noPriceYet, noMenu) },
+      { say: 'อยากจองรถรับสนามบินครับ', check: all(noPriceYet, noMenu, noTour) },
+      { say: 'กระบี่ ไปส่ง de malee krabi', check: all(noPriceYet, noMenu, noSystemNotFound) }, // รู้จุดรับ+จุดส่งแล้ว แต่ยังไม่รู้คนและเวลา → ถามต่อ ไม่ส่งตาราง
+      { say: '2คน', check: all(noMenu, noSystemNotFound, noPriceYet, noTour) }, // ยังไม่รู้วัน/เวลา และลูกค้าไม่ได้ถามราคา → ถามวัน/เวลาต่อ ไม่บอกราคา
+      { say: 'มันอยู่อ่าวนางหรือคลองแห้งครับ', check: all(noMenu, noSystemNotFound, noPriceYet) },
+      { say: '23ตค26', check: all(noMenu, noSystemNotFound, noPriceYet) },
+      { say: '1300', check: all(noMenu, noSystemNotFound, noEmojiConfirm, (r) => need(hasPrice(r, PRICE2), `สรุปจองต้องมีราคา ${fmtP(PRICE2)}`), (r) => need(/ยืนยัน|confirm/i.test(r), 'ต้องชวนพิมพ์ ยืนยัน')) },
+      { say: 'โอเค', check: (r) => need(isBooking(r), 'ต้องออก [BOOKING_CONFIRMED] เมื่อลูกค้าพิมพ์ "โอเค"').concat(noSystemNotFound(r)) },
+    ],
+    checkAll: (rs) => [
+      ...(countMenus(rs) <= 1 ? [] : [`ตารางราคาขึ้น ${countMenus(rs)} ครั้ง (ควรไม่เกิน 1)`]),
+      ...(countTours(rs) <= 1 ? [] : [`ข้อเสนอทัวร์ขึ้น ${countTours(rs)} ครั้ง (ควรไม่เกิน 1)`]),
+    ],
+  },
+  {
+    id: 'S2',
+    name: 'S2 ลูกค้าส่งครบในข้อความเดียว → สรุปจองพร้อมราคาเลย ไม่ถามซ้ำ ไม่ส่งตาราง',
+    turns: [
+      { say: 'จองรถสนามบินกระบี่ ไป De Malee Krabi 2 คน 23/10/2026 13:00', check: all(noMenu, noSystemNotFound, noEmojiConfirm, (r) => need(hasPrice(r, PRICE2), `ต้องมีราคา ${fmtP(PRICE2)}`)) },
+      { say: 'ตกลง', check: (r) => need(isBooking(r), 'ต้องออก [BOOKING_CONFIRMED] เมื่อพิมพ์ "ตกลง"') },
+    ],
+  },
+  {
+    id: 'S3',
+    name: 'S3 ถามราคากว้างๆ รู้แค่จุดรับ → ตารางครั้งเดียว; ถามต่อ ห้ามส่งตารางซ้ำ',
+    turns: [
+      { say: 'สอบถามราคารถ สนามบินกระบี่', check: (r) => need(countMenus([r]) === 1, 'รอบแรกต้องมีตารางราคา 1 ครั้ง (ถ้าไม่มี = Gemini ไม่ได้เรียก list_prices_from)') },
+      { say: 'ไปอ่าวนาง', check: all(noMenu, noTour) },
+      { say: '2 คน', check: all(noMenu, noTour) },
+    ],
+    checkAll: (rs) => [
+      ...(countMenus(rs) === 1 ? [] : [`ตารางราคาขึ้น ${countMenus(rs)} ครั้ง (ควร 1)`]),
+      ...(countTours(rs) <= 1 ? [] : [`ข้อเสนอทัวร์ขึ้น ${countTours(rs)} ครั้ง (ควรไม่เกิน 1)`]),
+    ],
+  },
+  {
+    id: 'S4',
+    name: 'S4 โรงแรมที่ระบบไม่รู้จัก → ถามย่าน (ไม่ส่งตาราง ไม่ส่งต่อแชมป์ทันที) → บอกย่านอ่าวนาง → ถามวัน/เวลา → สรุปจองพร้อมราคาอ่าวนาง',
+    turns: [
+      { say: 'สนามบินกระบี่ ไป โรงแรมซันไชน์พาราไดซ์ 2 คน', check: all(noMenu, noSystemNotFound, noPriceYet) },
+      { say: 'อยู่อ่าวนางครับ', check: all(noMenu, noSystemNotFound, noPriceYet) }, // ยังไม่รู้วัน/เวลา → ถามต่อ
+      { say: '23/10/2026 13:00', check: all(noMenu, noSystemNotFound, (r) => need(hasPrice(r, PRICE2), `สรุปจองต้องมีราคา ${fmtP(PRICE2)} (ตามย่านอ่าวนาง)`)) },
+    ],
+    checkAll: (rs) => (countMenus(rs) === 0 ? [] : ['ไม่ควรส่งตารางเลย']),
+  },
+  {
+    id: 'S5',
+    name: 'S5 ลูกค้าถามราคาตรงๆ ครบจุดรับ+จุดส่ง+จำนวนคน → ตอบราคาทันที + เสนอทัวร์ 1 ครั้ง ไม่ส่งตาราง',
+    turns: [
+      { say: 'สนามบินกระบี่ไปอ่าวนาง 5 คน ราคาเท่าไหร่', check: all(noMenu, (r) => need(hasPrice(r, PRICE5), `ต้องตอบราคา ${fmtP(PRICE5)}`), (r) => need(r.includes('🏝️'), 'ควรมีข้อเสนอทัวร์ 1 ครั้งท้ายราคา')) },
+      { say: 'ขอบคุณครับ แล้วต้องจองยังไง', check: all(noMenu, noTour) },
+    ],
+  },
+  {
+    id: 'S6',
+    name: 'S6 ไม่มีราคาเส้นทาง (เกาะสมุย) ครบข้อมูล → สรุปจองแบบรอแชมป์ ไม่ชวนยืนยัน/ไม่พูดสร้างลิงก์ → ลูกค้าพิมพ์ โอเค แล้วไม่ออก booking',
+    turns: [
+      { say: 'จองรถสนามบินกระบี่ ไปเกาะสมุย 2 คน 23/10/2026 13:00', check: all(noMenu, noSystemNotFound, noPayLinkPromise, (r) => (/ย่าน|อ่าวนาง|คลองแห้ง/.test(r) ? ['ถามย่านของเกาะสมุย (ควรส่งต่อแชมป์เลย ไม่ถามย่าน)'] : [])) },
+      { say: 'โอเค', check: (r) => [...(isBooking(r) ? ['ออก [BOOKING_CONFIRMED] ทั้งที่ไม่มีราคา'] : []), ...noPayLinkPromise(r)] },
+    ],
+  },
+  {
+    id: 'S7',
+    name: 'S7 อังกฤษ: De Malee Krabi + ยืนยันด้วยคำว่า confirm → ตอบอังกฤษ ราคาถูก ไม่มี ✅ บังคับ',
+    turns: [
+      { say: 'Hi, I need a transfer from Krabi Airport to De Malee Krabi hotel', check: all(noMenu, noPriceYet) },
+      { say: '2 people, 23 Oct 2026, 1pm', check: all(noMenu, noEmojiConfirm, (r) => need(hasPrice(r, PRICE2), `ต้องมีราคา ${fmtP(PRICE2)}`), (r) => need(!/[฀-๿]/.test(r), 'ตอบมีตัวอักษรไทยทั้งที่ลูกค้าพิมพ์อังกฤษ')) },
+      { say: 'confirm', check: (r) => need(isBooking(r), 'ต้องออก [BOOKING_CONFIRMED] เมื่อพิมพ์ confirm') },
+    ],
+  },
+  {
+    id: 'S8',
+    name: 'S8 ลูกค้าตอบรับทัวร์หลังเสนอ → ตอบรายละเอียดทัวร์จาก FAQ แล้วพากลับมาจองรถ ไม่ส่งตารางหรือเสนอทัวร์ซ้ำ',
+    turns: [
+      { say: 'สนามบินกระบี่ไปอ่าวนาง 2 คน ราคาเท่าไหร่', check: all(noMenu, (r) => need(hasPrice(r, PRICE2), `ต้องตอบราคา ${fmtP(PRICE2)}`)) },
+      { say: 'ทัวร์ 4 เกาะราคาเท่าไหร่', check: all(noMenu, noTour) },
+      { say: 'โอเค งั้นขอจองรถรับสนามบินก่อน วันที่ 23/10/2026 เวลา 13:00 ไปส่งที่ De Malee Krabi', check: all(noMenu, noTour, noEmojiConfirm) },
+    ],
+    checkAll: (rs) => (countTours(rs) <= 1 ? [] : [`ข้อเสนอทัวร์ขึ้น ${countTours(rs)} ครั้ง (ควรไม่เกิน 1)`]),
+  },
+];
+
+// คำยืนยันหลายแบบ: ประวัติจบที่สรุปการจอง (ข้อความสรุปเป็นแบบที่บอทใช้จริง) แล้วลูกค้าพิมพ์ทีละคำ ต้องได้ [BOOKING_CONFIRMED] ทุกคำ
+const confirmWords = ['ยืนยัน', 'ยืนยันครับ', 'โอเค', 'โอเคครับ', 'ตกลง', 'ตกลงค่ะ', 'ได้เลย', 'จองเลย', 'ok', 'yes', '✅'];
+const summaryText =
+  'สรุปการจองนะครับ 🚐\n📅 วันที่: 23/10/2026 เวลา 13:00 น.\n📍 รับที่: สนามบินกระบี่\n📍 ส่งที่: De Malee Krabi\n👥 จำนวน: 2 คน\n💰 ราคา: ' +
+  fmtP(PRICE2) +
+  ' บาท\nพิมพ์ ยืนยัน (หรือ โอเค / ตกลง) เพื่อรับลิงก์ชำระเงินครับ\nหรือ แก้ไข ถ้าต้องการเปลี่ยนข้อมูล';
+const confirmHistory = [
+  { role: 'user' as const, text: 'จองรถสนามบินกระบี่ ไป De Malee Krabi 2 คน 23/10/2026 13:00' },
+  { role: 'model' as const, text: summaryText },
+];
+
+async function runSales(only?: string) {
+  let fail = 0;
+  let pass = 0;
+  console.log(`ราคาอ้างอิงจากชีต: อ่าวนาง 1-3 คน = ${fmtP(PRICE2)} / 4-8 คน = ${fmtP(PRICE5)}`);
+  for (const sc of salesScenarios.filter((s) => !only || s.id === only)) {
+    console.log(`\n######## ${sc.name}`);
+    const history: { role: 'user' | 'model'; text: string }[] = [];
+    const replies: string[] = [];
+    const problems: string[] = [];
+    for (const [i, turn] of sc.turns.entries()) {
+      try {
+        const out = await generateReply(turn.say, '', history);
+        replies.push(out);
+        history.push({ role: 'user', text: turn.say }, { role: 'model', text: out });
+        const issues = turn.check ? turn.check(out) : [];
+        console.log(`\n[${i + 1}] ลูกค้า: ${turn.say}\n    บอท: ${out.replace(/\n/g, '\n         ')}`);
+        for (const m of issues) console.log(`    ❌ ${m}`);
+        problems.push(...issues.map((m) => `รอบ ${i + 1}: ${m}`));
+      } catch (e) {
+        const m = `ERROR: ${(e as Error).message.slice(0, 200)}`;
+        console.log(`\n[${i + 1}] ลูกค้า: ${turn.say}\n    ❌ ${m}`);
+        problems.push(`รอบ ${i + 1}: ${m}`);
+        break;
+      }
+    }
+    for (const m of sc.checkAll?.(replies) ?? []) {
+      console.log(`    ❌ (ทั้งบท) ${m}`);
+      problems.push(`ทั้งบท: ${m}`);
+    }
+    if (problems.length === 0) { pass++; console.log(`\n>>> ${sc.id} ผ่าน ✔`); } else { fail++; console.log(`\n>>> ${sc.id} ไม่ผ่าน (${problems.length} ข้อ)`); }
+  }
+
+  if (!only || only === 'CW') {
+    console.log('\n######## CW คำยืนยันหลายแบบ (ประวัติจบที่สรุปการจองพร้อมราคา)');
+    const bad: string[] = [];
+    for (const w of confirmWords) {
+      try {
+        const out = await generateReply(w, '', confirmHistory);
+        const ok = isBooking(out);
+        console.log(`  "${w}" → ${ok ? 'ออก [BOOKING_CONFIRMED] ✔' : '❌ ไม่ออก booking: ' + out.slice(0, 80).replace(/\n/g, ' ')}`);
+        if (!ok) bad.push(w);
+      } catch (e) {
+        console.log(`  "${w}" → ❌ ERROR ${(e as Error).message.slice(0, 100)}`);
+        bad.push(w);
+      }
+    }
+    if (bad.length === 0) { pass++; console.log('>>> CW ผ่าน ✔'); } else { fail++; console.log(`>>> CW ไม่ผ่าน: ${bad.join(', ')}`); }
+  }
+  console.log(`\n==== สรุป: ผ่าน ${pass} / ไม่ผ่าน ${fail} ====`);
+}
+
 const mode = process.argv[2];
+if (mode === 'sales') {
+  await runSales(process.argv[3]);
+  process.exit(0);
+}
 const toRun = mode === 'odd' ? oddCases : mode === 'faq' ? faqCases : mode === 'menu' ? menuCases : mode === 'all' ? [...cases, ...oddCases, ...faqCases, ...menuCases] : cases;
 console.log(`รัน ${toRun.length} ข้อ (โหมด: ${mode ?? 'ปกติ'})  — ใช้ "odd" = คำถามแปลกๆ, "faq" = ทดสอบ FAQ, "menu" = ตารางราคาจากต้นทาง, "all" = ทั้งหมด`);
 
