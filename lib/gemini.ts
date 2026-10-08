@@ -3,7 +3,7 @@
 
 import { GoogleGenAI, Type, FunctionCallingConfigMode } from '@google/genai';
 import type { Content } from '@google/genai';
-import { lookupPrice, priceMenu, offersAlreadyMade, tourOfferText, zonesInText, zoneLabelTh } from './prices';
+import { lookupPrice, groupOptions, priceMenu, offersAlreadyMade, tourOfferText, zonesInText, zoneLabelTh } from './prices';
 import type { PriceLookupResult } from './prices';
 import { recordPlaceZone } from './place-zones';
 import { norm } from './text-norm';
@@ -58,6 +58,39 @@ async function learnPlace(
     }
     await recordPlaceZone(c.name, c.zone, customerSaid ? 'customer' : 'gemini');
   }
+}
+
+/**
+ * ล้างรูปแบบ markdown ที่ LINE แสดงเป็นตัวอักษรดิบ: "* รายการ" / "- รายการ" → "• รายการ", **ตัวหนา** → ตัวธรรมดา
+ * (prompt สั่งห้ามแล้วแต่ Gemini ยังหลุดเป็นบางครั้ง — เจอในแชททดสอบ 8 ต.ค. 2026)
+ */
+export function stripMarkdown(text: string): string {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/^[ \t]*[*\-][ \t]+/gm, '• ');
+}
+
+/**
+ * กลุ่มเกิน 9 คน (รถตู้ 1 คันนั่งสูงสุด 9) ห้ามออกสรุปจอง/ลิงก์ชำระเงินเอง — ต้องให้พี่แชมป์จัดรถและยืนยัน (แชมป์สั่ง 8 ต.ค. 2026)
+ * ถ้าคำตอบมีจำนวนคน > 9 ในสรุป (👥 / pax=) → ตัด block จอง + บรรทัดชวนยืนยัน/ลิงก์ แล้วต่อท้ายข้อความส่งต่อ + [HANDOFF]
+ */
+export function guardLargeGroup(reply: string, lang: 'thai' | 'english' | 'other'): string {
+  const m = reply.match(/👥[^\n\d]*(\d{1,3})/) ?? reply.match(/pax=(\d{1,3})/);
+  const n = m ? Number(m[1]) : 0;
+  if (n <= 9) return reply;
+  let out = reply.replace(/\[BOOKING_CONFIRMED\][\s\S]*?(\[\/BOOKING_CONFIRMED\]|$)/g, '');
+  out = out
+    .split('\n')
+    .filter((l) => !/ยืนยัน|แก้ไข|ลิงก์|confirm|\bedit\b|payment link/i.test(l))
+    .join('\n')
+    .replace(/\[HANDOFF\]/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  const tail =
+    lang === 'thai'
+      ? 'กลุ่มนี้พี่แชมป์จะจัดรถตามที่เลือกและยืนยันการจองพร้อมแจ้งวิธีชำระเงินให้ครับ'
+      : 'For this group size, Champ will arrange the vehicles, confirm your booking and send the payment details shortly.';
+  return `${out}\n\n${tail}\n[HANDOFF]`;
 }
 
 export const DEFAULT_REPLY_EN =
@@ -200,6 +233,20 @@ export async function generateReply(
           },
         },
         {
+          name: 'group_options',
+          description:
+            'กลุ่มเกิน 9 คน (รถตู้ 1 คันนั่งสูงสุด 9 คน): คืน 2 ทางเลือกพร้อมราคา — รถตู้หลายคัน และรถตู้ 1 คัน + รถเก๋ง/SUV (เฉพาะ 10-12 คน) ใช้เมื่อลูกค้าบอกจำนวนคนเกิน 9 และรู้จุดรับ/จุดส่งแล้ว',
+          parameters: {
+            type: Type.OBJECT,
+            properties: {
+              origin: { type: Type.STRING, description: 'จุดรับ ตามที่ลูกค้าพิมพ์' },
+              destination: { type: Type.STRING, description: 'จุดส่ง ตามที่ลูกค้าพิมพ์ (ใช้ชื่อย่านถ้าระบบยังไม่รู้จักสถานที่)' },
+              pax: { type: Type.INTEGER, description: 'จำนวนผู้โดยสารรวมทั้งหมด (เกิน 9)' },
+            },
+            required: ['origin', 'destination', 'pax'],
+          },
+        },
+        {
           name: 'search_faq',
           description:
             'ค้นข้อมูลทั่วไปของ CTT (บริการ นโยบาย ทัวร์ ความปลอดภัย การติดต่อ ข้อมูลกระบี่ ฯลฯ) จาก FAQ จริง คืน status: ok / weak / not_found / error พร้อมแถวที่ตรง ห้ามใช้ค้นราคารถรับส่ง (ใช้ lookup_price)',
@@ -272,6 +319,10 @@ export async function generateReply(
               result = { status: 'not_found', message: 'ไม่รู้จักจุดรับนี้ ให้ถามลูกค้าว่าจุดรับอยู่ย่านไหน ถ้ายังไม่ทราบแจ้งว่าพี่แชมป์จะเช็คให้ และใส่ [HANDOFF]' };
             }
             log.info('gemini.price_menu', { status: m.status });
+          } else if (call.name === 'group_options') {
+            const g = (call.args ?? {}) as { origin?: string; destination?: string; pax?: number | string };
+            result = { ...(await groupOptions(String(g.origin ?? ''), String(g.destination ?? ''), Number(g.pax))) };
+            log.info('gemini.group_options', { status: result.status });
           } else if (call.name === 'lookup_price') {
             const args = (call.args ?? {}) as { origin?: string; destination?: string; pax?: number | string; date?: string; time?: string };
             const lp = await lookupPrice(String(args.origin ?? ''), String(args.destination ?? ''), Number(args.pax));
@@ -349,7 +400,7 @@ export async function generateReply(
     if (menuText) return `${lang === 'thai' ? 'ราคารถรับ-ส่งตามนี้ครับ' : 'Here are our transfer prices:'}\n\n${menuText}`;
     throw new Error('gemini_empty_response');
   }
-  const reply = extractReply(raw);
+  const reply = guardLargeGroup(stripMarkdown(extractReply(raw) ?? ''), lang);
   if (!reply) {
     log.warn('gemini.reply_unusable', { lang, startsWith: raw.slice(0, 20) });
     if (menuText) return `${lang === 'thai' ? 'ราคารถรับ-ส่งตามนี้ครับ' : 'Here are our transfer prices:'}\n\n${menuText}`;
@@ -361,7 +412,7 @@ export async function generateReply(
   // แจ้งราคาแล้ว (ราคาปรากฏในคำตอบ) และยังไม่เคยเสนอทัวร์ → เสนอทัวร์ 1 ครั้ง ต่อท้ายราคา แล้วหลังจากนั้นโฟกัสการจองรถ
   // ไม่ต่อท้ายในข้อความที่เป็นการยืนยันจอง ([BOOKING_CONFIRMED]) เพราะลูกค้ากำลังจะจ่ายเงิน
   const quoted = priceQuoted as { price: number } | null;
-  if (quoted && !already.tour && !reply.includes('[BOOKING_CONFIRMED]')) {
+  if (quoted && !already.tour && !reply.includes('[BOOKING_CONFIRMED]') && !reply.includes('[HANDOFF]')) {
     const p = quoted.price;
     if (reply.includes(p.toLocaleString('en-US')) || reply.includes(String(p))) {
       return `${reply}\n\n${tourOfferText(lang)}`;

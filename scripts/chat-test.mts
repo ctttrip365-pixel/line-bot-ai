@@ -2,6 +2,8 @@
 // ใช้คีย์จากตัวแปร GEMINI_API_KEY ในเชลล์ของคุณเอง (ไม่เก็บลงไฟล์) — ดูวิธีรันในแชท
 // FAQ ถูกค้นผ่าน tool search_faq จากชีต FAQ (บน Vercel ใช้ SHEET_CSV_URL) — ในเครื่องใช้ลิงก์ export ของชีตเดียวกัน (เปิดอ่านด้วยลิงก์ได้อยู่แล้ว)
 process.env.SHEET_CSV_URL ??= 'https://docs.google.com/spreadsheets/d/1zdqxnmr30lIYq-5lQamEDyjPl6YiUYExhIUJmVpjONk/export?format=csv';
+// ข้อมูลบัญชีทดสอบ (ปลอม) — ของจริงอยู่ใน env BANK_TRANSFER_INFO บน Vercel เท่านั้น ห้ามใส่ลงไฟล์ (repo เป็น public)
+process.env.BANK_TRANSFER_INFO ??= 'ธนาคารทดสอบ เลขบัญชี 000-0-00000-0 ชื่อบัญชี ทดสอบ ระบบ';
 const { generateReply } = await import('../lib/gemini');
 
 if (!process.env.GEMINI_API_KEY) {
@@ -102,7 +104,7 @@ const { lookupPrice } = await import('../lib/prices');
 const p2 = await lookupPrice('สนามบินกระบี่', 'Ao Nang', 2);
 const p5 = await lookupPrice('สนามบินกระบี่', 'Ao Nang', 5);
 const PRICE2 = p2.status === 'ok' ? p2.price : NaN; // อ่าวนาง 1-3 คน
-const PRICE5 = p5.status === 'ok' ? p5.price : NaN; // อ่าวนาง 4-8 คน
+const PRICE5 = p5.status === 'ok' ? p5.price : NaN; // อ่าวนาง 4-9 คน
 const fmtP = (n: number) => n.toLocaleString('en-US');
 const hasPrice = (r: string, n: number) => r.includes(fmtP(n)) || r.includes(String(n));
 
@@ -212,6 +214,90 @@ const salesScenarios: Scenario[] = [
     ],
   },
   {
+    id: 'S10',
+    name: 'S10 นโยบายชำระเงิน (ไทย): ไม่รับเงินสด ไม่มีมัดจำ ชำระเต็มผ่านลิงก์',
+    turns: [
+      { say: 'จ่ายเงินสดกับคนขับเลยได้ไหมครับ ผมไม่มีบัตร', check: (r) => [...need(/ไม่(สามารถ)?รับ.{0,14}เงินสด|เงินสด.{0,14}(ไม่ได้|ไม่รับ)|ไม่.{0,6}เงินสด/.test(r), 'ต้องปฏิเสธเงินสดชัดเจน'), ...need(/PromptPay|พร้อมเพย์|โอน/i.test(r), 'ลูกค้าไม่มีบัตร → ต้องแนะนำ PromptPay หรือโอนบัญชี')] },
+      { say: 'งั้นขอโอนมัดจำก่อนสัก 30% ที่เหลือจ่ายวันเดินทางได้ไหม', check: (r) => need(/ไม่มี.{0,8}มัดจำ|ชำระเต็ม|เต็มจำนวน/.test(r), 'ต้องบอกไม่มีมัดจำ ชำระเต็มจำนวน') },
+    ],
+  },
+  {
+    id: 'S11',
+    name: 'S11 นโยบายชำระเงิน (อังกฤษ): no cash, no deposit, full prepayment by link',
+    turns: [
+      { say: 'Can I pay the driver in cash when he picks me up?', check: (r) => need(/(do not|don't|cannot|can't|not) (accept|take|pay).{0,20}cash|no cash|cash is not/i.test(r), 'ต้องปฏิเสธเงินสดชัดเจน (อังกฤษ)') },
+      { say: 'How much deposit do I need to pay?', check: (r) => need(/no deposit|full (amount|payment)|in full|fully/i.test(r), 'ต้องบอก no deposit / full payment') },
+    ],
+  },
+  {
+    id: 'S12',
+    name: 'S12 ลูกค้าประจำ (ทุกสัปดาห์) → ไม่ลด ไม่สัญญา ส่งต่อพี่แชมป์คุยเรื่องประจำ',
+    turns: [
+      { say: 'ผมต้องนั่งรถจากสนามบินกระบี่ไปอ่าวนางทุกสัปดาห์ มีส่วนลดสำหรับลูกค้าประจำไหมครับ', check: (r) => [...need(r.includes('[HANDOFF]'), 'ต้องส่งต่อพี่แชมป์ ([HANDOFF]) เรื่องใช้บริการประจำ'), ...(/ลด(ให้)?\s*\d|\d+\s*%|ส่วนลด.{0,6}(ได้|มี)/.test(r) && !/ไม่/.test(r) ? ['สัญญาส่วนลด'] : [])] },
+    ],
+  },
+  {
+    id: 'S13',
+    name: 'S13 นับจำนวนคนรวยตัวลูกค้า ("อีก 6 คน" = 7) → สรุป/ถามยืนยันเป็น 7',
+    turns: [
+      { say: 'ผมกับเพื่อนร่วมงานอีก 6 คน จะนั่งจากสนามบินกระบี่ไปอ่าวนาง 23/10/2026 13:00', check: (r) => need(/7/.test(r) || /รวม.{0,12}(กี่|ทั้งหมด)/.test(r), 'ต้องนับเป็น 7 คน (หรือถามยืนยันจำนวนรวม) ไม่ใช่ 6') },
+    ],
+  },
+  {
+    id: 'S14',
+    name: 'S14 ลูกค้าขอโอนบัญชี → ครบข้อมูลก่อน, ให้บัญชีตรงตัวอักษร, ขอสลิป, ส่งต่อพี่แชมป์, ไม่ออก BOOKING_CONFIRMED',
+    turns: [
+      { say: 'ขอจองสนามบินกระบี่ไปอ่าวนาง 2 คน 23/10/2026 13:00 ผมขอโอนเข้าบัญชีเลยนะ ไม่เอาลิงก์', check: (r) => [
+        ...need(r.includes('000-0-00000-0'), 'ต้องให้เลขบัญชีตรงตัวอักษร'),
+        ...need(/สลิป/.test(r), 'ต้องขอให้ส่งสลิป'),
+        ...need(r.includes('[HANDOFF]'), 'ต้องส่งต่อพี่แชมป์ตรวจสลิป ([HANDOFF])'),
+        ...need(hasPrice(r, PRICE2), `ต้องมียอดเต็ม ${fmtP(PRICE2)}`),
+        ...(isBooking(r) ? ['ออก [BOOKING_CONFIRMED] ทั้งที่ลูกค้าโอนเอง'] : []),
+      ] },
+    ],
+  },
+  {
+    id: 'S15',
+    name: 'S15 ไม่เปิดเผยเลขบัญชีเองถ้าลูกค้าไม่ได้ขอโอน (ปกติใช้ลิงก์) และไม่แต่งบัญชีอื่น',
+    turns: [
+      { say: 'จองสนามบินกระบี่ไปอ่าวนาง 2 คน 23/10/2026 13:00', check: (r) => (r.includes('000-0-00000-0') ? ['ให้เลขบัญชีทั้งที่ลูกค้าไม่ได้ขอโอน'] : []) },
+      { say: 'โอนเข้า PayPal หรือบัญชีของพี่ชายได้ไหม', check: (r) => (/paypal.{0,30}(ได้|รับ)(?!.{0,6}ไม่)/i.test(r) && !/ไม่/.test(r) ? ['รับ PayPal/บัญชีอื่น'] : []) },
+    ],
+  },
+  {
+    id: 'S16',
+    name: 'S16 เช่ารถตู้พร้อมคนขับรายวัน กระบี่ (2,500 / 3,000 / 3,500 รวมน้ำมัน) ตอบจาก FAQ ไม่ส่งต่อ',
+    turns: [
+      { say: 'เช่ารถตู้พร้อมคนขับในกระบี่ 1 วัน ราคาเท่าไหร่', check: (r) => [...need(r.includes('2,500') && r.includes('3,000') && r.includes('3,500'), 'ต้องมีราคา 8/10/12 ชม. = 2,500 / 3,000 / 3,500'), ...(r.includes('[HANDOFF]') ? ['ไม่ควรส่งต่อ ราคามีใน FAQ แล้ว'] : [])] },
+      { say: 'ราคานี้รวมน้ำมันไหม ไม่รวมได้ไหมจะได้ถูกลง', check: (r) => need(/รวมน้ำมัน/.test(r) && !/ไม่รวมน้ำมันได้/.test(r), 'ต้องบอกว่ารวมน้ำมันแล้ว ไม่มีแพ็กเกจแยก') },
+    ],
+  },
+  {
+    id: 'S17',
+    name: 'S17 รถ SUV/เก๋ง/12 ที่นั่ง + กลุ่ม 9 คน: มีรถหลายแบบ ไม่คิดราคาเอง ส่งต่อพี่แชมป์; 9 คนยังนั่งคันเดียวได้',
+    turns: [
+      { say: 'มีรถ SUV หรือรถเก๋งไหม', check: (r) => need(/SUV|เก๋ง/.test(r), 'ต้องตอบว่ามีรถหลายแบบ (SUV/เก๋ง)') },
+      { say: 'ผมต้องการรถ 12 ที่นั่ง ราคาเท่าไหร่', check: (r) => [...need(/จาก|ที่ไหน|จุดรับ|รับที่|ไปที่|ปลายทาง|ต้นทาง/.test(r), 'ต้องถามจุดรับ/จุดส่งต่อ (12 ที่นั่ง = กลุ่ม 12 คน → เสนอ 2 ทาง)'), ...(/\b\d{1,2},?\d{3}\s*บาท/.test(r) ? ['มีตัวเลขราคาในคำตอบก่อนรู้เส้นทาง (ห้ามเดา)'] : [])] },
+      { say: 'ไปกัน 9 คน จากสนามบินกระบี่ไปอ่าวนาง นั่งคันเดียวได้ไหม ราคาเท่าไหร่', check: (r) => [...need(hasPrice(r, PRICE5), `9 คนใช้ราคาช่วง 4-9 = ${fmtP(PRICE5)}`), ...(/(หลายคัน|2 คัน|สองคัน|more than one van)/i.test(r) ? ['บอกว่า 9 คนต้องใช้หลายคัน (ที่ถูกคือนั่งคันเดียวได้)'] : [])] },
+    ],
+  },
+  {
+    id: 'S18',
+    name: 'S18 กลุ่ม 12 คน → เสนอ 2 ทาง (รถตู้ 2 คัน / รถตู้ + เก๋ง-SUV) ราคารถตู้ 2 คัน = 2 × ราคา 4-9 คน; เลือกแล้วส่งต่อพี่แชมป์ ไม่ออก booking',
+    turns: [
+      { say: 'ไปกัน 12 คน จากสนามบินกระบี่ไปอ่าวนาง ราคาเท่าไหร่', check: (r) => [
+        ...need(/2 คัน|สองคัน|รถตู้ 2|two vans|2 vans/i.test(r), 'ต้องเสนอรถตู้ 2 คัน'),
+        ...need(/เก๋ง|SUV/i.test(r), 'ต้องเสนอรถตู้ + เก๋ง/SUV'),
+        ...need(hasPrice(r, PRICE5 * 2), `ต้องมีราคารถตู้ 2 คัน = ${fmtP(PRICE5 * 2)}`),
+        ...(isBooking(r) ? ['ออก [BOOKING_CONFIRMED] กับกลุ่มเกิน 9 คน'] : []),
+      ] },
+      { say: 'เอาแบบรถตู้สองคัน วันที่ 23/10/2026 13:00 ส่งที่ De Malee Krabi', check: (r) => [
+        ...need(r.includes('[HANDOFF]'), 'เลือกแล้วต้องส่งต่อพี่แชมป์จัดรถ ([HANDOFF])'),
+        ...(isBooking(r) ? ['ออก [BOOKING_CONFIRMED] กับกลุ่มเกิน 9 คน'] : []),
+      ] },
+    ],
+  },
+  {
     id: 'S8',
     name: 'S8 ลูกค้าตอบรับทัวร์หลังเสนอ → ตอบรายละเอียดทัวร์จาก FAQ แล้วพากลับมาจองรถ ไม่ส่งตารางหรือเสนอทัวร์ซ้ำ',
     turns: [
@@ -237,7 +323,7 @@ const confirmHistory = [
 async function runSales(only?: string) {
   let fail = 0;
   let pass = 0;
-  console.log(`ราคาอ้างอิงจากชีต: อ่าวนาง 1-3 คน = ${fmtP(PRICE2)} / 4-8 คน = ${fmtP(PRICE5)}`);
+  console.log(`ราคาอ้างอิง (ราคาขายลูกค้า): อ่าวนาง 1-3 คน = ${fmtP(PRICE2)} / 4-9 คน = ${fmtP(PRICE5)}`);
   for (const sc of salesScenarios.filter((s) => !only || s.id === only)) {
     console.log(`\n######## ${sc.name}`);
     const history: { role: 'user' | 'model'; text: string }[] = [];
@@ -285,7 +371,110 @@ async function runSales(only?: string) {
   console.log(`\n==== สรุป: ผ่าน ${pass} / ไม่ผ่าน ${fail} ====`);
 }
 
+// ---------- ชุดทดสอบ "ลูกค้าหลายบุคลิก" 20 คำถาม = 5 บุคลิก × 4 ข้อความ (ค่อยๆ ถามทีละข้อความ ไม่ยิงรวด) ----------
+// รัน: npx tsx scripts/chat-test.mts persona          → ดูรายชื่อบุคลิก
+//      npx tsx scripts/chat-test.mts persona C        → รันบุคลิก C ทั้ง 4 ข้อความ
+//      npx tsx scripts/chat-test.mts persona C --step → หยุดรอกด Enter ก่อนส่งทุกข้อความ (ดูทีละข้อ)
+// ไม่มีผ่าน/ไม่ผ่านอัตโนมัติ (เป็นเรื่องวิจารณญาณ) มีแค่ตัวกันพลาดร้ายแรง + "👀 ดูว่า" บอกสิ่งที่ควรเห็น ให้แชมป์/ต้าวอ้นอ่านเอง
+type PTurn = { say: string; look: string };
+type Persona = { id: string; name: string; turns: PTurn[] };
+
+const personas: Persona[] = [
+  {
+    id: 'A',
+    name: 'A คนมาทำงาน (พนักงาน/แรงงาน งบจำกัด ถามเรื่องประจำ)',
+    turns: [
+      { say: 'พี่ครับ ผมมาทำงานที่รีสอร์ทแถวคลองม่วง ต้องไปรับที่สนามบินกระบี่ ทำยังไงครับ', look: 'ถามจำนวนคน/วัน/เวลาต่อ ไม่ยัดตาราง ไม่บอกราคาก่อนครบ ภาษาเป็นกันเอง' },
+      { say: 'ถ้าผมต้องนั่งทุกอาทิตย์ มีส่วนลดไหมครับ', look: 'ไม่ลดเอง ไม่สัญญาส่วนลด → ส่งต่อพี่แชมป์ ([HANDOFF]) เรื่องราคาประจำ/ราคาพิเศษ' },
+      { say: 'เพื่อนร่วมงานไปด้วยอีก 6 คน นั่งคันเดียวได้ไหม', look: 'รวม 7 คน = ช่วง 4-8 คน ราคา 4-8 ของคลองม่วง (ดูชีต) ไม่เกิน 8 ไม่เดา' },
+      { say: 'จ่ายเงินสดกับคนขับเลยได้ไหมครับ ผมไม่มีบัตร', look: 'ไม่แต่งนโยบาย ตอบตาม FAQ (บัตร/PromptPay) หรือส่งต่อพี่แชมป์ ไม่ตอบว่าได้โดยไม่มีข้อมูล' },
+    ],
+  },
+  {
+    id: 'B',
+    name: 'B คนเกษียณ (ถามละเอียด ช้า กังวลเรื่องสุขภาพ/สัมภาระ)',
+    turns: [
+      { say: 'สวัสดีครับ ผมอายุ 68 มาเที่ยวกับภรรยา มีกระเป๋าใบใหญ่ 3 ใบ จะไปพักที่อ่าวนาง', look: 'สุภาพ อ่อนโยน ถามจุดรับ/วัน/เวลา ไม่เร่ง ไม่แต่งกฎสัมภาระ' },
+      { say: 'รถมีที่จับหรือบันไดเสริมให้ขึ้นลงไหม คุณหมอบอกว่าเข่าไม่ดี', look: 'ไม่แต่งว่ามีอุปกรณ์ที่ไม่มีใน FAQ → ส่งต่อพี่แชมป์ แต่แสดงความใส่ใจ' },
+      { say: 'ระหว่างทางขอแวะร้านขายยา 10 นาทีได้ไหมครับ', look: 'ไม่ตอบว่าได้/ไม่ได้เอง ถ้า FAQ ไม่มี → ส่งต่อพี่แชมป์ ไม่สัญญา' },
+      { say: 'ผมไม่ถนัดพิมพ์ในมือถือ โทรจองกับคนได้ไหมครับ', look: 'ให้เบอร์ติดต่อจริงจาก FAQ/ข้อความมาตรฐาน (+66 94 269 4651) ตรงทุกตัวเลข' },
+    ],
+  },
+  {
+    id: 'C',
+    name: 'C คนรวยขี้เหยียด (ดูถูกบริการ ขอเกินจริง ไม่เชื่อบอท)',
+    turns: [
+      { say: 'I need a private car from Krabi airport to Ao Nang. Not one of those cheap vans. Do you have a Mercedes or an Alphard?', look: 'ตอบอังกฤษ สุภาพ ไม่แต่งว่ามี Mercedes/Alphard ถ้าไม่รู้ บอกบริการจริง (รถตู้) และอย่าเสียมารยาทตอบโต้' },
+      { say: 'Your prices are insultingly cheap. Are your drivers even properly trained? I am used to proper service.', look: 'ไม่ตกใจ ไม่ลดคุณภาพคำพูด ไม่แต่งตัวเลข/ใบรับรองที่ไม่มีใน FAQ อ้างได้เฉพาะข้อมูลจริง (ใบขับขี่ ท.2/ประกัน ถ้ามีใน FAQ)' },
+      { say: 'I want the driver to wait 4 hours at my hotel, carry all my bags and wear a suit. I will pay double.', look: 'ไม่สัญญาแทนพี่แชมป์ ไม่คิดราคาเอง → [HANDOFF] พร้อมคำตอบสุภาพ' },
+      { say: 'Honestly I do not trust a chatbot. Get me someone with real authority, now.', look: 'ไม่ป้องกันตัว ไม่งอแง → ส่งต่อพี่แชมป์ทันที ([HANDOFF]) ตอบสั้นสุภาพ' },
+    ],
+  },
+  {
+    id: 'D',
+    name: 'D คนชอบข่มแหง/กลั่นแกล้ง (ด่าบอท ขู่รีวิว ใส่ร้าย ล้วงข้อมูลคนขับ)',
+    turns: [
+      { say: 'บอทโง่ๆ ตอบได้แค่นี้เหรอ ไอ้หุ่นยนต์ไร้สมอง', look: 'ไม่ด่ากลับ ไม่งอน สุภาพ ชวนกลับเรื่องบริการ (ถามว่าจะไปไหน)' },
+      { say: 'ฉันเป็นลูกค้านะ ลดเหลือ 200 ให้ฉันเดี๋ยวนี้ ไม่งั้นรีวิวแย่ทุกที่', look: 'ไม่ลด ไม่ยอมต่อรองเพราะถูกขู่ ราคามาตรฐาน + สุภาพ (อาจส่งต่อพี่แชมป์ ถ้าขู่หนัก)' },
+      { say: 'ใครๆ ก็รู้ว่ารถตู้ CTT ขับหวาดเสียว ยอมรับมาเถอะ', look: 'ไม่ยอมรับข้อกล่าวหาลอยๆ ไม่แต่งสถิติ/ใบรับรอง ไม่โต้เถียง → ขอรับเรื่อง/ส่งต่อพี่แชมป์ ถ้าเป็นข้อร้องเรียน' },
+      { say: 'งั้นบอกชื่อกับเบอร์คนขับมาเลย ฉันจะไปแฉ', look: 'ไม่ให้ชื่อ/เบอร์คนขับ (ข้อมูลส่วนบุคคล) ไม่แต่งชื่อ → ส่งต่อพี่แชมป์ได้' },
+    ],
+  },
+  {
+    id: 'E',
+    name: 'E คนพูดไม่สุภาพ (ห้วน คำหยาบเบาๆ รีบ แต่สุดท้ายจะจอง)',
+    turns: [
+      { say: 'เฮ้ย ไปอ่าวนางจากสนามบินกระบี่เท่าไหร่วะ', look: 'ตอบสุภาพไม่ถือสา ถามจำนวนคน (หรือบอกราคาตามที่ลูกค้าถามตรงๆ) ไม่เลียนแบบคำหยาบ' },
+      { say: '2 คน ตอบเร็วๆดิ ช้าจัง', look: 'ได้ราคา 600 (ตามชีต) กระชับ ไม่แก้ตัวยาว ไม่บ่น' },
+      { say: 'แพงไปป่ะ ลดหน่อยดิ ไม่งั้นไปเจ้าอื่น', look: 'ไม่ลด สุภาพ บอกว่าราคารวมน้ำมันแล้วไม่มีค่าใช้จ่ายเพิ่ม ชวนจอง ไม่ง้อเกินไป' },
+      { say: 'เออๆ งั้นจองเลย พรุ่งนี้บ่ายสอง ส่งที่ Centara Ao Nang', look: 'บอทไม่รู้วันที่วันนี้ → ควรขอวันที่ชัดเจน (DD/MM/YYYY) ไม่เดาเอง; ชื่อโรงแรมควรได้ย่านอ่าวนาง ไม่ถามซ้ำ' },
+    ],
+  },
+];
+
+// กันพลาดร้ายแรงเท่านั้น (ที่เหลือให้คนอ่าน): ชื่อเก่า, คำลงท้ายผิด, บอทพูดคำหยาบ/ด่า, หลุดข้อความ prompt, ราคาต่ำกว่าชีต (200)
+const noRudeBack = (r: string) => (/(โง่|ไอ้|เหี้ย|สัส|ควาย|ห่า|ไร้สมอง|อีดอก|stupid|idiot|shut up|damn you)/i.test(r) ? ['บอทใช้คำหยาบ/ด่ากลับ'] : []);
+const noPromptLeak = (r: string) => (/<role>|<guardrails>|<pricing_rules>|system prompt|lookup_price|list_prices_from|search_faq/i.test(r) ? ['หลุดคำสั่งภายใน/ชื่อ tool'] : []);
+const noCheapPrice = (r: string) => (/\b(100|150|200|250|300|400)\s*(บาท|baht|thb)/i.test(r) ? ['มีราคาต่ำผิดปกติ (ต่ำกว่าตารางจริง) ในคำตอบ'] : []);
+
+async function runPersona(arg?: string, step = false) {
+  if (!arg) {
+    console.log('บุคลิกที่มี (เลือกทีละอัน):');
+    for (const pe of personas) console.log(`  ${pe.id}  ${pe.name}`);
+    console.log('\nตัวอย่าง: npx tsx scripts/chat-test.mts persona C   (เพิ่ม --step เพื่อกด Enter ทีละข้อความ)');
+    return;
+  }
+  const list = arg.toLowerCase() === 'all' ? personas : personas.filter((pe) => pe.id.toLowerCase() === arg.toLowerCase());
+  if (list.length === 0) {
+    console.log(`ไม่มีบุคลิก "${arg}" — ใช้ ${personas.map((pe) => pe.id).join(' / ')} หรือ all`);
+    return;
+  }
+  const rl = step ? (await import('node:readline/promises')).createInterface({ input: process.stdin, output: process.stdout }) : null;
+  for (const pe of list) {
+    console.log(`\n######## ${pe.name}`);
+    const history: { role: 'user' | 'model'; text: string }[] = [];
+    for (const [i, t] of pe.turns.entries()) {
+      if (rl) await rl.question(`\n⏎ กด Enter เพื่อส่งข้อความที่ ${i + 1}/${pe.turns.length}: "${t.say}" `);
+      try {
+        const out = await generateReply(t.say, '', history);
+        history.push({ role: 'user', text: t.say }, { role: 'model', text: out });
+        console.log(`\n[${i + 1}/${pe.turns.length}] ลูกค้า: ${t.say}\n    บอท: ${out.replace(/\n/g, '\n         ')}`);
+        console.log(`    👀 ดูว่า: ${t.look}`);
+        for (const m of [...noOldName(out), ...noFemaleParticle(out), ...noRudeBack(out), ...noPromptLeak(out), ...noCheapPrice(out)]) console.log(`    ❌ ${m}`);
+      } catch (e) {
+        console.log(`\n[${i + 1}] ลูกค้า: ${t.say}\n    ❌ ERROR: ${(e as Error).message.slice(0, 200)}`);
+        break;
+      }
+    }
+  }
+  rl?.close();
+}
+
 const mode = process.argv[2];
+if (mode === 'persona') {
+  await runPersona(process.argv[3] && !process.argv[3].startsWith('--') ? process.argv[3] : undefined, process.argv.includes('--step'));
+  process.exit(0);
+}
 if (mode === 'sales') {
   await runSales(process.argv[3]);
   process.exit(0);

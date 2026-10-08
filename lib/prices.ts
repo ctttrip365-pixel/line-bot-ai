@@ -14,7 +14,33 @@ import { loadLearnedAliases } from './place-zones';
 const DEFAULT_PRICE_SHEET_ID = '1sqITrRjl6vvm1NZy9KkmNZOgj2knoVuS4xNBkwY35YQ';
 const CACHE_TTL_MS = 60_000;
 const FETCH_TIMEOUT_MS = 5000;
-const MAX_PAX_FOR_PRICE = 8;
+// ราคาในชีตราคา (แท็บ Prices) = "ราคา Agent" (ราคาที่ CTT เรียกเก็บจาก Agent/บริษัททัวร์ ใช้ทำบิลเบิก)
+// ราคาที่บอทบอก "ลูกค้า" = ราคา Agent + 15% แล้วปัดเป็นหลักร้อยที่ใกล้ที่สุด (แชมป์สั่ง 8 ต.ค. 2026: ราคา Agent กับราคาขายลูกค้าเป็นคนละราคา)
+// ปรับ/ปิดได้ด้วย env CUSTOMER_MARKUP (เช่น 1.15; ตั้งเป็น 1 = ไม่บวก) — แก้ที่ Vercel ไม่ต้อง deploy โค้ด
+// ผลกระทบ: Stripe Payment Link ประจำเส้นทางในชีต (คอลัมน์ link_1_3/link_4_8) ล็อกราคา Agent ไว้ → ปิดใช้เมื่อมีการบวก
+//          ระบบจะสร้าง Checkout Session ตามยอดใหม่แทน (ทางเดียวกับเส้นที่ไม่มี Payment Link)
+const CUSTOMER_MARKUP = (() => {
+  const v = Number(process.env.CUSTOMER_MARKUP ?? '1.15');
+  return Number.isFinite(v) && v >= 1 && v <= 3 ? v : 1.15;
+})();
+/**
+ * ราคา Agent → ราคาขายลูกค้า: คูณ markup แล้วปัดเป็นหลักร้อยที่ใกล้ที่สุด (ตั้งแต่ครึ่งร้อยขึ้นไปปัดขึ้น)
+ * กติกาจากแชมป์ 8 ต.ค. 2026: 690 → 700 (ถึง 650 ขึ้นไปปัดขึ้น), 805 → 800 (ไม่ถึง 850 ปัดลง), 3,220 → 3,200
+ * ปรับหน่วยปัดด้วย env CUSTOMER_ROUND_UNIT (ค่าเริ่มต้น 100; ตั้ง 1 = ปัดเป็นบาทเต็ม) — +1e-9 กันเศษทศนิยมลอยตัว (เช่น 1,149.9999)
+ */
+const ROUND_UNIT = (() => {
+  const v = Number(process.env.CUSTOMER_ROUND_UNIT ?? '100');
+  return Number.isFinite(v) && v >= 1 ? v : 100;
+})();
+export function retailPrice(agentPrice: number): number {
+  return Math.floor((agentPrice * CUSTOMER_MARKUP) / ROUND_UNIT + 0.5 + 1e-9) * ROUND_UNIT;
+}
+const MARKUP_ACTIVE = CUSTOMER_MARKUP !== 1;
+
+// ช่วงราคา 4-9 คน (แชมป์ยืนยัน 8 ต.ค. 2026: รถตู้นั่งสูงสุด 9 คน, 9 คนใช้ราคาช่วง 4-8 เดิม) — เกิน 9 คนใช้ groupOptions()
+const MAX_PAX_FOR_PRICE = 9;
+const VAN_MAX_PAX = 9;
+const CAR_MAX_PAX = 3; // รถเก๋ง/SUV รับได้สูงสุด 3 คน (แชมป์ยืนยัน 8 ต.ค. 2026) → เสนอรถตู้ 9 + เก๋ง/SUV ได้เฉพาะกลุ่ม 10-12 คน
 const ALLOW_REVERSE_PRICE = true;
 
 // ชื่อสถานที่ → zone ที่แชมป์ยืนยันแล้ว (8 ต.ค. 2026): โรงแรมย่านคลองแห้ง อ่าวนาง ใช้ราคาอ่าวนาง ไม่ต้องรอแชมป์ยืนยัน
@@ -35,6 +61,8 @@ interface PriceRow {
   price13: number;
   price48: number;
   note: string;
+  sedan?: number; // ราคารถเก๋งต่อคัน "ราคาขายลูกค้า" (จากคอลัมน์ price_sedan = ราคา Agent แล้วบวกเพิ่ม; ว่าง = ยังไม่มีราคา)
+  suv?: number; // ราคา SUV ต่อคัน ราคาขายลูกค้า (คอลัมน์ price_suv)
   link13: string; // Stripe Payment Link (ว่าง = ไม่มีลิงก์ประจำเส้นทางนี้)
   link48: string;
 }
@@ -50,7 +78,7 @@ interface PriceData {
 let cache: { data: PriceData; expiresAt: number } | null = null;
 
 export type PriceLookupResult =
-  | { status: 'ok'; from: string; to: string; pax: number; paxBand: '1-3' | '4-8'; price: number; note: string; paymentLink?: string }
+  | { status: 'ok'; from: string; to: string; pax: number; paxBand: '1-3' | '4-9'; price: number; note: string; paymentLink?: string }
   | { status: 'ambiguous'; place: string; options: string[]; message: string }
   | { status: 'handoff'; reason: string; message: string }
   | { status: 'not_found'; message: string };
@@ -123,14 +151,38 @@ function buildData(priceRows: string[][], aliasRows: string[][], learned: Array<
   const zoneNames = new Map<string, string>();
   const byFrom = new Map<string, PriceRow[]>();
 
+  // อ่านคอลัมน์ตามชื่อหัวตาราง (เติมคอลัมน์ price_sedan / price_suv ตรงไหนของแท็บ Prices ก็ได้) ถ้าไม่เจอชื่อใช้ลำดับเดิม
+  const header = (priceRows[0] ?? []).map((h) => (h ?? '').trim().toLowerCase());
+  const col = (name: string, fallback: number) => {
+    const i = header.indexOf(name);
+    return i >= 0 ? i : fallback;
+  };
+  const iFrom = col('from_zone', 0), iTo = col('to_zone', 1), i13 = col('price_1_3', 2), i48 = col('price_4_8', 3);
+  const iNote = col('note', 4), iActive = col('active', 5), iL13 = col('link_1_3', 6), iL48 = col('link_4_8', 7);
+  const iSedan = header.indexOf('price_sedan'), iSuv = header.indexOf('price_suv');
+  const posNum = (s: string | undefined) => {
+    const n = toNumber(s ?? '');
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  };
+
   for (const r of priceRows.slice(1)) {
-    const [from, to, p13, p48, note, active, l13, l48] = r.map((c) => (c ?? '').trim());
+    const c = r.map((x) => (x ?? '').trim());
+    const [from, to, p13, p48, note, active, l13, l48] = [c[iFrom], c[iTo], c[i13], c[i48], c[iNote], c[iActive], c[iL13], c[iL48]];
     if (!from || !to) continue;
     if (active && active.toUpperCase() !== 'TRUE') continue;
-    const price13 = toNumber(p13);
-    const price48 = toNumber(p48);
-    if (!Number.isFinite(price13) || !Number.isFinite(price48) || price13 <= 0 || price48 <= 0) continue;
-    const row: PriceRow = { from, to, price13, price48, note: note ?? '', link13: safePaymentLink(l13), link48: safePaymentLink(l48) };
+    const agent13 = toNumber(p13);
+    const agent48 = toNumber(p48);
+    if (!Number.isFinite(agent13) || !Number.isFinite(agent48) || agent13 <= 0 || agent48 <= 0) continue;
+    const price13 = retailPrice(agent13);
+    const price48 = retailPrice(agent48);
+    const row: PriceRow = {
+      from, to, price13, price48, note: note ?? '',
+      // Payment Link ในชีตล็อกราคา Agent — ใช้ได้เฉพาะตอนไม่บวกราคา (ไม่งั้นลูกค้าจ่ายราคา Agent และยอดไม่ตรง pending)
+      link13: MARKUP_ACTIVE ? '' : safePaymentLink(l13),
+      link48: MARKUP_ACTIVE ? '' : safePaymentLink(l48),
+      sedan: iSedan >= 0 && posNum(c[iSedan]) ? retailPrice(posNum(c[iSedan])!) : undefined,
+      suv: iSuv >= 0 && posNum(c[iSuv]) ? retailPrice(posNum(c[iSuv])!) : undefined,
+    };
     rows.push(row);
     rowIndex.set(`${norm(from)}|${norm(to)}`, row);
     const fromList = byFrom.get(norm(from)) ?? [];
@@ -239,8 +291,9 @@ export async function lookupPrice(origin: string, destination: string, pax: numb
   if (pax > MAX_PAX_FOR_PRICE) {
     return {
       status: 'handoff',
-      reason: 'pax_over_8',
-      message: 'เกิน 8 คนต้องใช้รถมากกว่า 1 คัน ห้ามคิดราคาเอง ให้แจ้งว่าพี่แชมป์จะประเมินให้และส่งต่อแชมป์',
+      reason: 'pax_over_9',
+      message:
+        'เกิน 9 คน รถตู้ 1 คันไม่พอ ให้เรียก tool group_options(origin, destination, pax) เพื่อเสนอ 2 ทางเลือก (รถตู้หลายคัน / รถตู้ + รถเก๋งหรือ SUV) ห้ามคิดราคาเอง',
     };
   }
 
@@ -271,7 +324,7 @@ export async function lookupPrice(origin: string, destination: string, pax: numb
         from: row.from,
         to: row.to,
         pax,
-        paxBand: small ? '1-3' : '4-8',
+        paxBand: small ? '1-3' : '4-9',
         price: small ? row.price13 : row.price48,
         note: row.note,
         paymentLink: (small ? row.link13 : row.link48) || undefined,
@@ -286,6 +339,85 @@ export async function lookupPrice(origin: string, destination: string, pax: numb
       fromZones.length === 0 || toZones.length === 0
         ? 'ยังไม่ทราบย่านของสถานที่นี้ (ห้ามพูดว่า "ระบบไม่รู้จัก/ไม่พบ") — ถ้าเป็นชื่อโรงแรม/ที่พัก/สถานที่ในกระบี่ พังงา ภูเก็ต ให้ถามลูกค้าสั้นๆ ว่าอยู่ย่านไหน (เช่น อ่าวนาง คลองแห้ง ภูเก็ต เขาหลัก) แล้วเรียก lookup_price ใหม่โดยใช้ชื่อย่านเป็นปลายทาง; ถ้าเป็นจังหวัด/เกาะ/เมืองไกลที่ชัดเจนว่าไม่อยู่ในตาราง (เช่น เกาะสมุย เกาะพะงัน หัวหิน เชียงใหม่) ห้ามถามย่าน ให้แจ้งว่าพี่แชมป์จะเช็คราคาให้ แล้วใส่ [HANDOFF]'
         : 'ยังไม่มีราคาเส้นทางนี้ในตาราง ห้ามเดาราคา ให้แจ้งว่าพี่แชมป์จะเช็คราคาให้และส่งต่อแชมป์',
+  };
+}
+
+// ============================================================
+// กลุ่มเกิน 9 คน: เสนอ 2 ทางเลือก (แชมป์สั่ง 8 ต.ค. 2026) — (1) รถตู้หลายคัน (2) รถตู้ 1 คัน + รถเก๋งหรือ SUV (เฉพาะ 10-12 คน)
+// ราคารถเก๋ง/SUV อ่านจากคอลัมน์ price_sedan / price_suv ในแท็บ Prices (แชมป์เติมเอง) ถ้ายังว่าง = null → ให้พี่แชมป์แจ้ง
+// ============================================================
+
+export type GroupOptionsResult =
+  | {
+      status: 'ok';
+      pax: number;
+      from: string;
+      to: string;
+      vans: { count: number; paxPerVan: number[]; pricePerVan: number; total: number };
+      vanPlusCar: null | {
+        vanPax: number;
+        carPax: number;
+        vanPrice: number;
+        sedan: null | { price: number; total: number };
+        suv: null | { price: number; total: number };
+      };
+      instruction: string;
+    }
+  | { status: 'ambiguous'; message: string }
+  | { status: 'handoff'; message: string }
+  | { status: 'not_found'; message: string };
+
+export async function groupOptions(origin: string, destination: string, pax: number): Promise<GroupOptionsResult> {
+  if (!Number.isFinite(pax) || pax <= VAN_MAX_PAX) {
+    return { status: 'handoff', message: 'ไม่เกิน 9 คนนั่งรถตู้คันเดียวได้ ให้ใช้ lookup_price แทน' };
+  }
+  if (pax > VAN_MAX_PAX * 3) {
+    return { status: 'handoff', message: 'เกิน 27 คนต้องจัดรถหลายคัน ห้ามคิดราคาเอง ให้แจ้งว่าพี่แชมป์จะแจ้งราคาให้และส่งต่อแชมป์' };
+  }
+  const data = await loadPrices();
+  for (const place of [origin, destination]) {
+    const amb = AMBIGUOUS_PLACES[norm(place)];
+    if (amb) return { status: 'ambiguous', message: `"${place}" ยังไม่ชัดเจน ให้ถามลูกค้าว่าสนามบินภูเก็ตหรือเข้าเมือง/ย่านชายหาด` };
+  }
+  const fromZones = candidateZones(origin, data);
+  const toZones = candidateZones(destination, data);
+  let row: PriceRow | undefined;
+  for (const f of fromZones) {
+    for (const t of toZones) {
+      row = row ?? data.rowIndex.get(`${norm(f)}|${norm(t)}`);
+    }
+  }
+  if (!row) {
+    return { status: 'not_found', message: 'ยังไม่มีราคาเส้นทางนี้ในตาราง ห้ามเดาราคา ให้แจ้งว่าพี่แชมป์จะแจ้งราคากลุ่มให้และส่งต่อแชมป์' };
+  }
+
+  const count = Math.ceil(pax / VAN_MAX_PAX);
+  const base = Math.floor(pax / count);
+  const paxPerVan = Array.from({ length: count }, (_, i) => base + (i < pax - base * count ? 1 : 0));
+  // ทุกคันมีผู้โดยสาร >= 4 คน (pax >= 10 → คันละ >= 5) จึงใช้ราคาช่วง 4-9 คนต่อคัน
+  const vans = { count, paxPerVan, pricePerVan: row.price48, total: count * row.price48 };
+
+  let vanPlusCar: Extract<GroupOptionsResult, { status: 'ok' }>['vanPlusCar'] = null;
+  const carPax = pax - VAN_MAX_PAX;
+  if (carPax >= 1 && carPax <= CAR_MAX_PAX) {
+    vanPlusCar = {
+      vanPax: VAN_MAX_PAX,
+      carPax,
+      vanPrice: row.price48,
+      sedan: row.sedan ? { price: row.sedan, total: row.price48 + row.sedan } : null,
+      suv: row.suv ? { price: row.suv, total: row.price48 + row.suv } : null,
+    };
+  }
+  return {
+    status: 'ok',
+    pax,
+    from: row.from,
+    to: row.to,
+    vans,
+    vanPlusCar,
+    instruction:
+      'เสนอให้ลูกค้าเลือก ' + (vanPlusCar ? '2 ทาง: (1) รถตู้ ' + count + ' คัน (2) รถตู้ 1 คัน + รถเก๋งหรือ SUV 1 คัน' : '1 ทาง: รถตู้ ' + count + ' คัน (กลุ่มนี้ไม่เหมาะกับรถตู้+เก๋ง)') +
+      ' ใช้ตัวเลขจากผลลัพธ์เท่านั้น ถ้า sedan หรือ suv เป็น null ให้บอกว่าพี่แชมป์จะแจ้งราคาส่วนรถเก๋ง/SUV ห้ามเดาตัวเลข เมื่อลูกค้าเลือกแล้วให้ถามวัน/เวลา/จุดรับ/จุดส่งให้ครบ แล้วใส่ [HANDOFF] ให้พี่แชมป์จัดรถและยืนยัน ห้ามพิมพ์ [BOOKING_CONFIRMED] และห้ามสร้างลิงก์ชำระเงิน',
   };
 }
 
@@ -362,7 +494,7 @@ export type PriceMenuResult =
 
 /**
  * ตารางราคาทุกปลายทางจากต้นทางที่ลูกค้าบอก (ชื่อสถานที่/โรงแรมใดๆ ก็ได้ ระบบแปลงเป็นโซนเอง)
- * pax: ถ้ารู้จำนวนคน (1-8) แสดงราคาช่วงนั้นช่วงเดียว ไม่งั้นแสดงทั้ง 1-3 / 4-8 คน
+ * pax: ถ้ารู้จำนวนคน (1-9) แสดงราคาช่วงนั้นช่วงเดียว ไม่งั้นแสดงทั้ง 1-3 / 4-8 คน
  * ท้ายตารางมีคำถามปลายทาง + เสนอทัวร์วันเดย์ (ไม่ใส่ราคาทัวร์ ราคาทัวร์ให้ตอบจาก FAQ เมื่อลูกค้าสนใจ)
  */
 export async function priceMenu(origin: string, lang: Lang, pax?: number, opts: { includeTourOffer?: boolean } = {}): Promise<PriceMenuResult> {
@@ -394,7 +526,7 @@ export async function priceMenu(origin: string, lang: Lang, pax?: number, opts: 
       ? `🚐 ราคารถรับ-ส่งจาก ${originLabel} (ต่อรถตู้ 1 คัน รวมน้ำมัน ไม่มีค่าใช้จ่ายเพิ่ม)`
       : `🚐 Van transfer prices from ${originLabel} (per van, fuel included, no extra charges)`
   );
-  if (small === undefined) lines.push(thai ? 'ราคาแสดงเป็น: 1-3 คน / 4-8 คน (บาท)' : 'Prices shown as: 1-3 people / 4-8 people (THB)');
+  if (small === undefined) lines.push(thai ? 'ราคาแสดงเป็น: 1-3 คน / 4-9 คน (บาท)' : 'Prices shown as: 1-3 people / 4-9 people (THB)');
   else lines.push(thai ? `สำหรับ ${pax} คน (บาท)` : `For ${pax} people (THB)`);
 
   groups.forEach((g, i) => {

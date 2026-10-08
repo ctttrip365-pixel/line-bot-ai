@@ -11,6 +11,7 @@ import { createCheckoutSession } from '@/lib/stripe';
 import { lookupPrice } from '@/lib/prices';
 import { newBookingRef, savePendingBooking } from '@/lib/bookings';
 import { getHistory, appendHistory } from '@/lib/history';
+import { isLaughterOnly } from '@/lib/chat-filters';
 import { findDriverByLineId, driverRosterUnavailable } from '@/lib/drivers';
 import { handleDriverMessage, handleDriverPostback } from '@/lib/driver-flow';
 import { log } from '@/lib/log';
@@ -54,6 +55,19 @@ export async function POST(req: Request) {
         return; // postbacks from non-drivers are ignored entirely (none are sent to customers today)
       }
 
+      // ลูกค้าส่งรูป (ส่วนใหญ่คือสลิปโอนเงิน): บอทดูรูปไม่ได้ → แจ้งแชมป์ให้ตรวจสลิปใน LINE OA Manager และตอบรับลูกค้า ไม่ปล่อยเงียบ
+      // คนขับ (ที่อยู่ในชีต) ส่งรูปมาไม่เกี่ยวกับลูกค้า ข้ามไป
+      if (event.type === 'message' && event.message.type === 'image') {
+        if (await findDriverByLineId(userId)) return;
+        await notifyAdmin(userId, '[ลูกค้าส่งรูปภาพ]', 'ลูกค้าส่งรูป (น่าจะเป็นสลิปโอนเงิน) — ตรวจสลิปและยืนยันการจองใน LINE OA Manager');
+        await replyWithRetry(
+          event.replyToken!,
+          'ได้รับรูปแล้วครับ พี่แชมป์จะตรวจสอบและยืนยันให้นะครับ 🙏\nWe received your picture. Champ will check it and confirm shortly 🙏',
+          3
+        );
+        return;
+      }
+
       if (event.type !== 'message' || event.message.type !== 'text') return;
 
       const userMessage = event.message.text;
@@ -69,6 +83,12 @@ export async function POST(req: Request) {
       if (driverRosterUnavailable() && /วันว่าง|เช็คงาน|ขอลา/.test(userMessage)) {
         log.warn('driver.roster_unavailable_keyword', { userId });
         await replyWithRetry(event.replyToken!, 'ระบบกำลังโหลดข้อมูลคนขับ ขอเวลาสักครู่ แล้วส่งข้อความนี้อีกครั้งนะครับ 🙏', 3);
+        return;
+      }
+
+      // เสียงหัวเราะล้วนๆ (55 / 555 / ฮ่าๆ / 😂) ไม่ใช่คำถาม → ไม่ตอบ ไม่เข้า Gemini ไม่บันทึกประวัติ (แชมป์สั่ง 8 ต.ค. 2026)
+      if (isLaughterOnly(userMessage)) {
+        log.info('webhook.laughter_ignored', { userId });
         return;
       }
 

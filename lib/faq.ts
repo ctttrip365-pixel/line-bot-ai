@@ -8,6 +8,7 @@
 //  - ตัดแถวราคารถรับส่งในหมวด Airport Transfer ออก (ราคาต้องมาจาก lookup_price ที่อ่านชีตราคาปัจจุบันเท่านั้น)
 //  - คืนผลพร้อมระดับความมั่นใจ ok / weak / not_found — weak ห้ามตอบเป็นข้อเท็จจริง, not_found ส่งต่อแชมป์
 
+import { EXTRA_FAQ } from './faq-extra';
 import { parseCsv } from './prices';
 import { log } from './log';
 
@@ -91,6 +92,8 @@ export function tokenize(text: string): Set<string> {
   return out;
 }
 
+const STALE_PAYMENT_POLICY = /มัดจำ|deposit|รับชำระเงินวิธีไหน|ชำระเงินได้วิธีไหน|payment methods|foreign customers pay|รถตู้รับ-ส่งนั่งได้กี่คน|passengers does the transfer van seat/i;
+
 function buildIndex(csvRows: string[][]): FaqIndex {
   const excluded = { template: 0, placeholder: 0, priceCovered: 0 };
   const docs: Indexed[] = [];
@@ -103,6 +106,11 @@ function buildIndex(csvRows: string[][]): FaqIndex {
       excluded.template++;
       return;
     }
+    // นโยบายเก่าในชีต (มัดจำ 30-50% / รับเงินสด / PayPal) ขัดกับนโยบายจริง — ไม่ให้ค้นเจอ จนกว่าแชมป์จะแก้แถวในชีต (ดู <payment_policy> ใน prompts.ts)
+    if (STALE_PAYMENT_POLICY.test(question)) {
+      excluded.placeholder++;
+      return;
+    }
     if (PLACEHOLDER.test(answer) || PLACEHOLDER.test(question)) {
       excluded.placeholder++;
       return;
@@ -112,6 +120,11 @@ function buildIndex(csvRows: string[][]): FaqIndex {
       return;
     }
     docs.push({ row: { id: i + 1, category, question, answer }, q: tokenize(question + ' ' + category), a: tokenize(answer) });
+  });
+
+  // แถวที่แชมป์อนุมัติแล้วจากโค้ด (lib/faq-extra.ts) — รวมกับแถวในชีต id เริ่มที่ 1001 กันชนกับเลขแถวในชีต
+  EXTRA_FAQ.forEach((r, i) => {
+    docs.push({ row: { id: 1001 + i, category: r.category, question: r.question, answer: r.answer }, q: tokenize(r.question + ' ' + r.category), a: tokenize(r.answer) });
   });
 
   const df = new Map<string, number>();
