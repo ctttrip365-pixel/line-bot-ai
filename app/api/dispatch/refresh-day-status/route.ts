@@ -8,6 +8,7 @@
 import { cacheDayStatusMap } from '@/lib/day-status';
 import { buildAndWriteMonthGrid } from '@/lib/driver-grid';
 import { alertUnassignedSoon } from '@/lib/unassigned-alert';
+import { alertNewPlaceZones } from '@/lib/place-zones';
 import { log } from '@/lib/log';
 
 export const runtime = 'nodejs';
@@ -40,6 +41,14 @@ export async function GET(req: Request) {
     log.error('unassigned_alert.failed', { err: (err as Error).message });
   }
 
-  log.info('refresh_day_status.done', { months, alert });
-  return new Response(JSON.stringify({ ok: true, months, alert }), { status: 200 });
+  // ตัวเดียวกัน: สรุปโรงแรม/สถานที่ที่บอทเพิ่งจำเข้าย่านจากแชทลูกค้า ให้แชมป์ตรวจใน Telegram (ผิดกด ❌)
+  let places: { sent: boolean; count: number } | null = null;
+  try {
+    places = await alertNewPlaceZones();
+  } catch (err) {
+    log.error('place_zones.digest_failed', { err: (err as Error).message });
+  }
+
+  log.info('refresh_day_status.done', { months, alert, places });
+  return new Response(JSON.stringify({ ok: true, months, alert, places }), { status: 200 });
 }

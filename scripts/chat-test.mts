@@ -116,6 +116,13 @@ const noTour = (r: string) => (r.includes('🏝️') ? ['มีข้อเส�
 const noPriceYet = (r: string) => (hasPrice(r, PRICE2) || hasPrice(r, PRICE5) ? [`บอกราคา ${fmtP(PRICE2)}/${fmtP(PRICE5)} ก่อนถามข้อมูลครบ`] : []);
 const noEmojiConfirm = (r: string) => (r.includes('✅') ? ['ยังใช้ ✅ ในข้อความของบอท (ควรใช้คำว่า ยืนยัน/โอเค/ตกลง)'] : []);
 const noPayLinkPromise = (r: string) => (/กำลังสร้างลิงก์|รับลิงก์ชำระเงิน|creating (the |a )?payment link/i.test(r) ? ['สัญญา/พูดถึงลิงก์จ่ายเงินทั้งที่ยังไม่มีราคา'] : []);
+// ตรวจ "แบบฟอร์ม" สรุปการจอง (มีไอคอน 📅📍👥💰 ตั้งแต่ 2 อย่างขึ้นไป) ไม่ใช่แค่คำว่า สรุปการจอง ที่อธิบายขั้นตอน
+const noSummaryYet = (r: string) => ((r.match(/📅|📍|👥|💰/g)?.length ?? 0) >= 2 ? ['ใช้แบบฟอร์มสรุปการจองทั้งที่ยังไม่ครบวัน/เวลา'] : []);
+// ภาษาไทยต้องลงท้าย ครับ ตลอด (ห้ามสลับ ค่ะ/คะ ในแชทเดียว)
+const noFemaleParticle = (r: string) => (/ค่ะ|นะคะ|ไหมคะ|โมงคะ|อะไรคะ|คะ\s*$/m.test(r) ? ['ลงท้ายด้วย ค่ะ/คะ (ต้องเป็น ครับ)'] : []);
+const noChampSummarize = (r: string) => (/พี่แชมป์จะ(สรุป|ส่งลิงก์|ส่งลิงค์)|Champ will (summari|send)/i.test(r) && !r.includes('[HANDOFF]') ? ['บอกว่าพี่แชมป์จะสรุปการจอง/ส่งลิงก์ (บอททำเอง)'] : []);
+// บอทชื่อ "น้องอันดา" — ห้ามเรียกตัวเองว่า พี่แชมป์ (ชื่อเจ้าของ) ตรวจทุกรอบของทุกสถานการณ์
+const noOldName = (r: string) => (/พี่แชมป์ AI|ผม(คือ)?พี่แชมป์|ฉันคือพี่แชมป์|Champ AI|Champ's assistant/i.test(r) ? ['บอทเรียกตัวเองว่า พี่แชมป์/Champ AI (ต้องเป็นน้องอันดา/Anda)'] : []);
 const isBooking = (r: string) => r.includes('[BOOKING_CONFIRMED]');
 const need = (cond: boolean, msg: string) => (cond ? [] : [msg]);
 const all = (...fs: Array<(r: string) => string[]>) => (r: string) => fs.flatMap((f) => f(r));
@@ -153,7 +160,7 @@ const salesScenarios: Scenario[] = [
     turns: [
       { say: 'สอบถามราคารถ สนามบินกระบี่', check: (r) => need(countMenus([r]) === 1, 'รอบแรกต้องมีตารางราคา 1 ครั้ง (ถ้าไม่มี = Gemini ไม่ได้เรียก list_prices_from)') },
       { say: 'ไปอ่าวนาง', check: all(noMenu, noTour) },
-      { say: '2 คน', check: all(noMenu, noTour) },
+      { say: '2 คน', check: all(noMenu, noTour, noSummaryYet, noChampSummarize) },
     ],
     checkAll: (rs) => [
       ...(countMenus(rs) === 1 ? [] : [`ตารางราคาขึ้น ${countMenus(rs)} ครั้ง (ควร 1)`]),
@@ -174,8 +181,8 @@ const salesScenarios: Scenario[] = [
     id: 'S5',
     name: 'S5 ลูกค้าถามราคาตรงๆ ครบจุดรับ+จุดส่ง+จำนวนคน → ตอบราคาทันที + เสนอทัวร์ 1 ครั้ง ไม่ส่งตาราง',
     turns: [
-      { say: 'สนามบินกระบี่ไปอ่าวนาง 5 คน ราคาเท่าไหร่', check: all(noMenu, (r) => need(hasPrice(r, PRICE5), `ต้องตอบราคา ${fmtP(PRICE5)}`), (r) => need(r.includes('🏝️'), 'ควรมีข้อเสนอทัวร์ 1 ครั้งท้ายราคา')) },
-      { say: 'ขอบคุณครับ แล้วต้องจองยังไง', check: all(noMenu, noTour) },
+      { say: 'สนามบินกระบี่ไปอ่าวนาง 5 คน ราคาเท่าไหร่', check: all(noMenu, noSummaryYet, noChampSummarize, (r) => need(hasPrice(r, PRICE5), `ต้องตอบราคา ${fmtP(PRICE5)}`), (r) => need(r.includes('🏝️'), 'ควรมีข้อเสนอทัวร์ 1 ครั้งท้ายราคา')) },
+      { say: 'ขอบคุณครับ แล้วต้องจองยังไง', check: all(noMenu, noTour, noSummaryYet, noChampSummarize) },
     ],
   },
   {
@@ -196,10 +203,19 @@ const salesScenarios: Scenario[] = [
     ],
   },
   {
+    id: 'S9',
+    name: 'S9 ถามชื่อบอท (ไทย/อังกฤษ) → ตอบ น้องอันดา / Anda ไม่เรียกตัวเองว่าพี่แชมป์',
+    turns: [
+      { say: 'คุณชื่ออะไรครับ', check: (r) => need(/อันดา/.test(r), 'ต้องตอบว่า น้องอันดา') },
+      { say: 'Who am I talking to? Are you a real person?', check: (r) => need(/Anda/i.test(r), 'ต้องแนะนำตัวว่า Anda') },
+      { say: 'ขอคุยกับเจ้าของได้ไหม', check: (r) => need(r.includes('[HANDOFF]') || /พี่แชมป์|เจ้าของ/.test(r), 'ควรส่งต่อเจ้าของ (พี่แชมป์) ไม่ใช่บอทเป็นพี่แชมป์เอง') },
+    ],
+  },
+  {
     id: 'S8',
     name: 'S8 ลูกค้าตอบรับทัวร์หลังเสนอ → ตอบรายละเอียดทัวร์จาก FAQ แล้วพากลับมาจองรถ ไม่ส่งตารางหรือเสนอทัวร์ซ้ำ',
     turns: [
-      { say: 'สนามบินกระบี่ไปอ่าวนาง 2 คน ราคาเท่าไหร่', check: all(noMenu, (r) => need(hasPrice(r, PRICE2), `ต้องตอบราคา ${fmtP(PRICE2)}`)) },
+      { say: 'สนามบินกระบี่ไปอ่าวนาง 2 คน ราคาเท่าไหร่', check: all(noMenu, noSummaryYet, noChampSummarize, (r) => need(hasPrice(r, PRICE2), `ต้องตอบราคา ${fmtP(PRICE2)}`)) },
       { say: 'ทัวร์ 4 เกาะราคาเท่าไหร่', check: all(noMenu, noTour) },
       { say: 'โอเค งั้นขอจองรถรับสนามบินก่อน วันที่ 23/10/2026 เวลา 13:00 ไปส่งที่ De Malee Krabi', check: all(noMenu, noTour, noEmojiConfirm) },
     ],
@@ -232,7 +248,7 @@ async function runSales(only?: string) {
         const out = await generateReply(turn.say, '', history);
         replies.push(out);
         history.push({ role: 'user', text: turn.say }, { role: 'model', text: out });
-        const issues = turn.check ? turn.check(out) : [];
+        const issues = [...(turn.check ? turn.check(out) : []), ...noOldName(out), ...noFemaleParticle(out)];
         console.log(`\n[${i + 1}] ลูกค้า: ${turn.say}\n    บอท: ${out.replace(/\n/g, '\n         ')}`);
         for (const m of issues) console.log(`    ❌ ${m}`);
         problems.push(...issues.map((m) => `รอบ ${i + 1}: ${m}`));

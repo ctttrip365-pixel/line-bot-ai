@@ -7,6 +7,8 @@
 // เส้นที่ไม่มีแถวใน Sheet = not_found → ส่งต่อแชมป์ ห้ามเดา (กฎราคาใน CLAUDE.md)
 
 import { log } from './log';
+import { norm } from './text-norm';
+import { loadLearnedAliases } from './place-zones';
 
 // ชีตเปิดแบบ "ทุกคนที่มีลิงก์ดูได้" อยู่แล้ว ใช้ gviz CSV ได้เลย ไม่ต้องมี key
 const DEFAULT_PRICE_SHEET_ID = '1sqITrRjl6vvm1NZy9KkmNZOgj2knoVuS4xNBkwY35YQ';
@@ -52,15 +54,6 @@ export type PriceLookupResult =
   | { status: 'ambiguous'; place: string; options: string[]; message: string }
   | { status: 'handoff'; reason: string; message: string }
   | { status: 'not_found'; message: string };
-
-// "สนามบิน ภูเก็ต" / "Phuket-Airport" / "phuket airport " → ตัวพิมพ์เล็ก ตัดช่องว่างและเครื่องหมาย
-function norm(s: string): string {
-  return s
-    .toLowerCase()
-    .normalize('NFC')
-    .replace(/[\s\-_.,()/]+/g, '')
-    .trim();
-}
 
 // คำกว้างที่ลูกค้าพิมพ์แล้วยังไม่รู้ว่าหมายถึงสนามบินหรือเข้าเมือง ต้องถามกลับก่อนตอบราคา
 const AMBIGUOUS_PLACES: Record<string, string[]> = {
@@ -124,7 +117,7 @@ function toNumber(s: string): number {
   return Number(String(s).replace(/[,\s]/g, ''));
 }
 
-function buildData(priceRows: string[][], aliasRows: string[][]): PriceData {
+function buildData(priceRows: string[][], aliasRows: string[][], learned: Array<[string, string]> = []): PriceData {
   const rows: PriceRow[] = [];
   const rowIndex = new Map<string, PriceRow>();
   const zoneNames = new Map<string, string>();
@@ -183,6 +176,10 @@ function buildData(priceRows: string[][], aliasRows: string[][]): PriceData {
   for (const [name, zone] of EXTRA_ALIASES) {
     if (zoneNames.has(norm(zone))) addAlias(name, zone);
   }
+  // ชื่อสถานที่ที่บอทเรียนรู้จากแชทลูกค้า (lib/place-zones.ts) — ต่อท้ายสุด ชีตและ alias ในโค้ดมาก่อนเสมอ
+  for (const [name, zone] of learned) {
+    if (zoneNames.has(norm(zone))) addAlias(name, zone);
+  }
 
   return { rows, rowIndex, aliases, zoneNames, byFrom };
 }
@@ -192,8 +189,8 @@ export async function loadPrices(): Promise<PriceData> {
   if (cache && cache.expiresAt > now) return cache.data;
 
   try {
-    const [priceRows, aliasRows] = await Promise.all([fetchTab('Prices'), fetchTab('Aliases')]);
-    const data = buildData(priceRows, aliasRows);
+    const [priceRows, aliasRows, learned] = await Promise.all([fetchTab('Prices'), fetchTab('Aliases'), loadLearnedAliases().catch(() => [] as Array<[string, string]>)]);
+    const data = buildData(priceRows, aliasRows, learned);
     if (data.rows.length === 0) throw new Error('price sheet has no valid rows');
     cache = { data, expiresAt: now + CACHE_TTL_MS };
     return data;
@@ -227,6 +224,12 @@ function candidateZones(place: string, data: PriceData): string[] {
     if (best) out.push(...best.zones);
   }
   return Array.from(new Set(out));
+}
+
+/** zone ที่รู้จักในข้อความอิสระ (เช่น "สอบถามราคารถ สนามบินกระบี่" → Krabi Airport) ใช้ตรวจว่าลูกค้าพูดถึงสถานที่ในตารางหรือไม่ */
+export async function zonesInText(text: string): Promise<string[]> {
+  const data = await loadPrices();
+  return candidateZones(text, data);
 }
 
 export async function lookupPrice(origin: string, destination: string, pax: number): Promise<PriceLookupResult> {
@@ -328,6 +331,11 @@ const GROUP_TITLES: Record<Lang, [string, string, string]> = {
 };
 
 const fmt = (n: number) => n.toLocaleString('en-US');
+
+/** ชื่อย่านภาษาไทยสำหรับแสดงให้แชมป์ (เช่น Ao Nang → อ่าวนาง) */
+export function zoneLabelTh(zone: string): string {
+  return ZONE_LABELS[zone]?.th ?? zone;
+}
 
 // ข้อเสนอทัวร์วันเดย์ — ขึ้นครั้งเดียวต่อบทสนทนา (แชมป์สั่ง 8 ต.ค. 2026) ใช้ 🏝️ เป็นตัวจับว่าเคยเสนอไปแล้ว (ดู offersAlreadyMade)
 const TOUR_OFFER_MARK = '🏝️';

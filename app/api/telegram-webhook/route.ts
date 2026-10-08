@@ -5,6 +5,8 @@
 // set at registration time (see apps-script/README or the setWebhook call in Phase 0).
 
 import { answerCallbackQuery, sendTelegramMessage, TelegramUpdate } from '@/lib/telegram';
+import { rejectPlace, adoptConflictZone } from '@/lib/place-zones';
+import { zoneLabelTh } from '@/lib/prices';
 import { confirmAssignment, cancelAssignment, listAssignmentsStrict } from '@/lib/assignments';
 import { listCalendarEvents } from '@/lib/gas-client';
 import { listDrivers } from '@/lib/drivers';
@@ -181,6 +183,14 @@ export async function POST(req: Request) {
           );
         }
       }
+    } else if (action === 'pz_rej') {
+      const p = await rejectPlace(rest[0]);
+      await answerCallbackQuery(cq.id, p ? 'ลบแล้ว' : 'ไม่พบรายการนี้');
+      if (p) await sendTelegramMessage(`🗑️ ลบ "${p.name}" ออกจากย่านที่บอทจำไว้แล้ว — ครั้งหน้าบอทจะถามย่านใหม่`);
+    } else if (action === 'pz_use') {
+      const p = await adoptConflictZone(rest[0]);
+      await answerCallbackQuery(cq.id, p ? 'เปลี่ยนย่านแล้ว' : 'ไม่พบรายการนี้');
+      if (p) await sendTelegramMessage(`🔁 "${p.name}" ใช้ย่าน ${zoneLabelTh(p.zone)} แล้ว`);
     } else {
       log.warn('telegram_webhook.unknown_action', { action });
       await answerCallbackQuery(cq.id);

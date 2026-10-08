@@ -1,9 +1,12 @@
 // lib/gemini.ts — Gemini wrapper with conversation history support
 // history ถูกโลดจาก Redis และส่งมาที่นี่ เพื่อให้ Gemini จำบทสนทนาได้
 
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, Type, FunctionCallingConfigMode } from '@google/genai';
 import type { Content } from '@google/genai';
-import { lookupPrice, priceMenu, offersAlreadyMade, tourOfferText } from './prices';
+import { lookupPrice, priceMenu, offersAlreadyMade, tourOfferText, zonesInText, zoneLabelTh } from './prices';
+import type { PriceLookupResult } from './prices';
+import { recordPlaceZone } from './place-zones';
+import { norm } from './text-norm';
 import { searchFaq, faqCategories } from './faq';
 import { log } from './log';
 import { buildSystemPrompt } from './prompts';
@@ -16,6 +19,45 @@ const MODEL = 'gemini-2.5-flash';
 // ลูกค้าพิมพ์ถามราคาไหม (ไทย/อังกฤษ/ฮีบรู/จีน) — ใช้ตัดสินว่าจะบอกราคาก่อนเก็บวัน/เวลาได้หรือเปล่า
 function customerAskedPrice(userTexts: string[]): boolean {
   return userTexts.some((t) => /ราคา|เท่าไหร่|เท่าไร|กี่บาท|ค่ารถ|ค่าบริการ|ค่าโดยสาร|price|how much|cost|fare|rate|quote|כמה|מחיר|多少|价格|价钱|费用|金额/i.test(t));
+}
+
+/**
+ * ถ้า lookup_price สำเร็จโดยใช้ "ชื่อย่าน" แทนสถานที่ที่ระบบไม่รู้จัก → บันทึก สถานที่ → ย่าน (lib/place-zones.ts)
+ * รู้ชื่อสถานที่จาก (1) พารามิเตอร์ place_name หรือ (2) รูปแบบ "โรงแรมXYZ (อ่าวนาง)" ในช่อง origin/destination
+ * source = customer ถ้าลูกค้าเป็นคนพูดถึงย่านนั้นเอง ไม่งั้น gemini (เดาจากความรู้ของโมเดล) — แชมป์เห็นป้ายต่างกันในสรุป 09:00
+ */
+async function learnPlace(
+  args: { origin?: string; destination?: string; place_name?: string; place_role?: string },
+  lp: PriceLookupResult,
+  userTexts: string[]
+): Promise<void> {
+  if (lp.status !== 'ok') return;
+  const cands: Array<{ name: string; areaText: string; zone: string }> = [];
+  const placeName = String(args.place_name ?? '').trim();
+  if (placeName) {
+    const role = args.place_role === 'origin' ? 'origin' : 'destination';
+    cands.push({ name: placeName, areaText: String(args[role] ?? ''), zone: role === 'origin' ? lp.from : lp.to });
+  }
+  for (const role of ['origin', 'destination'] as const) {
+    const m = String(args[role] ?? '').match(/^(.+?)\s*[（(]\s*(.+?)\s*[)）]\s*$/);
+    if (m) cands.push({ name: m[1], areaText: m[2], zone: role === 'origin' ? lp.from : lp.to });
+  }
+  const seen = new Set<string>();
+  for (const c of cands) {
+    const key = norm(c.name);
+    if (!key || seen.has(key) || key === norm(c.areaText)) continue;
+    seen.add(key);
+    if ((await zonesInText(c.name)).length > 0) continue; // ระบบรู้จักสถานที่นี้อยู่แล้ว (ชีต/alias) ไม่ต้องจำ
+    let customerSaid = false;
+    for (const t of userTexts) {
+      const nt = norm(t);
+      if (nt.includes(norm(c.areaText)) || nt.includes(norm(c.zone)) || nt.includes(norm(zoneLabelTh(c.zone))) || (await zonesInText(t)).includes(c.zone)) {
+        customerSaid = true;
+        break;
+      }
+    }
+    await recordPlaceZone(c.name, c.zone, customerSaid ? 'customer' : 'gemini');
+  }
 }
 
 export const DEFAULT_REPLY_EN =
@@ -33,7 +75,8 @@ async function callModel(
   ai: GoogleGenAI,
   contents: Content[],
   systemPrompt: string,
-  tools: unknown
+  tools: unknown,
+  forcePriceTool = false
 ): Promise<Awaited<ReturnType<GoogleGenAI['models']['generateContent']>>> {
   const MAX_ATTEMPTS = 2;
   let response: Awaited<ReturnType<GoogleGenAI['models']['generateContent']>> | undefined;
@@ -50,6 +93,10 @@ async function callModel(
         thinkingConfig: { thinkingBudget: 256 },
         maxOutputTokens: 2048,
         tools: tools as any,
+        // บังคับเรียก tool ราคา (ใช้เมื่อ Gemini ข้าม tool ทั้งที่ลูกค้าถามราคา) — ดูตรรกะใน generateReply
+        ...(forcePriceTool
+          ? { toolConfig: { functionCallingConfig: { mode: FunctionCallingConfigMode.ANY, allowedFunctionNames: ['lookup_price', 'list_prices_from'] } } }
+          : {}),
       },
     });
     const hasOutput = (response.functionCalls?.length ?? 0) > 0 || !!response.text?.trim();
@@ -81,7 +128,8 @@ export async function generateReply(
   // ขึ้นขายครั้งเดียวต่อบทสนทนา: ตารางราคา/ข้อเสนอทัวร์ที่ส่งไปแล้วในประวัติ ห้ามส่งซ้ำ (แชมป์สั่ง 8 ต.ค. 2026)
   const already = offersAlreadyMade(history);
   // ลูกค้า "ถามราคา" แล้วหรือยัง (ทั้งบทสนทนา) — ถ้ายังไม่เคยถาม แค่จะจอง ต้องถามวัน/เวลาให้ครบก่อนแล้วค่อยแจ้งราคาในสรุปจอง
-  const askedPrice = customerAskedPrice([...history.filter((m) => m.role === 'user').map((m) => m.text), userMessage]);
+  const userTexts = [...history.filter((m) => m.role === 'user').map((m) => m.text), userMessage];
+  const askedPrice = customerAskedPrice(userTexts);
   // รายชื่อหมวด FAQ (cache 60 วิ) ไว้ให้ Gemini เลือกหมวดตอนเรียก search_faq — โหลดไม่ได้ก็ไม่ล้ม (tool จะรายงาน error เอง)
   let categories = '';
   try {
@@ -130,6 +178,10 @@ export async function generateReply(
               origin: { type: Type.STRING, description: 'จุดรับ ตามที่ลูกค้าพิมพ์ เช่น สนามบินกระบี่, Avani Krabi' },
               destination: { type: Type.STRING, description: 'จุดส่ง ตามที่ลูกค้าพิมพ์ เช่น ป่าตอง, สนามบินภูเก็ต' },
               pax: { type: Type.INTEGER, description: 'จำนวนผู้โดยสาร' },
+              date: { type: Type.STRING, description: 'วันที่รับ ถ้าลูกค้าบอกแล้ว (เช่น 23/10/2026) — ถ้ายังไม่รู้ห้ามใส่/เว้นว่าง' },
+              time: { type: Type.STRING, description: 'เวลารับ ถ้าลูกค้าบอกแล้ว (เช่น 13:00) — ถ้ายังไม่รู้ห้ามใส่/เว้นว่าง' },
+              place_name: { type: Type.STRING, description: 'ชื่อโรงแรม/ที่พักตามที่ลูกค้าพิมพ์ — ใส่เฉพาะตอนที่คุณส่งชื่อ "ย่าน" แทนชื่อสถานที่นั้นใน origin/destination (เพราะระบบยังไม่รู้จักสถานที่) ระบบจะจดจำสถานที่นี้เข้าย่านนั้นให้ครั้งหน้า' },
+              place_role: { type: Type.STRING, description: 'place_name เป็น "origin" (จุดรับ) หรือ "destination" (จุดส่ง) — ค่าเริ่มต้น destination' },
             },
             required: ['origin', 'destination', 'pax'],
           },
@@ -178,6 +230,18 @@ export async function generateReply(
 
   const MAX_TOOL_ROUNDS = 3;
   let response = await callModel(ai, contents, systemPrompt, tools);
+  // ลูกค้าถามราคาและพูดถึงสถานที่ในตาราง แต่ Gemini ตอบเป็นข้อความเฉยๆ ไม่เรียก tool (เจอจริง: ทักทายอย่างเดียว ไม่มีตาราง) → ลองใหม่โดยบังคับเรียก tool ราคา 1 ครั้ง
+  // เงื่อนไขแคบ: ต้องไม่มี tool call เลย + ข้อความมีคำถามราคา + มีชื่อสถานที่ที่รู้จัก (กันคำถามราคาทัวร์/FAQ ที่ไม่เกี่ยวกับตารางรถ)
+  if (customerAskedPrice([userMessage]) && !(response.functionCalls?.length ?? 0)) {
+    try {
+      if ((await zonesInText(userMessage)).length > 0) {
+        log.warn('gemini.price_tool_skipped_retry', {});
+        response = await callModel(ai, contents, systemPrompt, tools, true);
+      }
+    } catch (err) {
+      log.warn('gemini.price_tool_retry_failed', { err: (err as Error).message });
+    }
+  }
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const calls = response.functionCalls;
@@ -209,8 +273,15 @@ export async function generateReply(
             }
             log.info('gemini.price_menu', { status: m.status });
           } else if (call.name === 'lookup_price') {
-            const args = (call.args ?? {}) as { origin?: string; destination?: string; pax?: number | string };
-            result = { ...(await lookupPrice(String(args.origin ?? ''), String(args.destination ?? ''), Number(args.pax))) };
+            const args = (call.args ?? {}) as { origin?: string; destination?: string; pax?: number | string; date?: string; time?: string };
+            const lp = await lookupPrice(String(args.origin ?? ''), String(args.destination ?? ''), Number(args.pax));
+            result = { ...lp };
+            const dateTimeKnown = String(args.date ?? '').trim() !== '' && String(args.time ?? '').trim() !== '';
+            if (result.status === 'ok' && askedPrice && !dateTimeKnown) {
+              // ลูกค้าถามราคา ตอบราคาได้ แต่ยังไม่ครบวัน/เวลา → ห้ามใช้แบบฟอร์ม "สรุปการจอง" (ให้แสดงเมื่อครบ 5 อย่างเท่านั้น)
+              result.instruction =
+                'ยังไม่ครบวันที่+เวลารับ: ตอบราคาเป็นประโยคสั้นๆ 1 ประโยค แล้วถามวัน/เวลาที่ขาดตรงๆ ห้ามใช้แบบฟอร์ม "สรุปการจอง" (📅📍👥💰) จนกว่าจะรู้วันที่และเวลาครบ';
+            }
             if (result.status === 'ok' && !askedPrice) {
               // ลูกค้ายังไม่เคยถามราคา → ห้ามบอกราคาตอนนี้ (ยังเก็บรายละเอียดไม่ครบ) ถามวัน/เวลาที่ขาดก่อน
               result.instruction =
@@ -219,6 +290,8 @@ export async function generateReply(
             log.info('gemini.price_lookup', { status: result.status });
             // หาราคาไม่เจอ/กำกวม → ไม่แนบตารางเอง (แชมป์สั่ง 8 ต.ค. 2026: ขึ้นขายครั้งเดียว ถามรายละเอียดให้ครบก่อน)
             // Gemini ถามย่านของสถานที่แล้วเรียก lookup_price ใหม่ — ตารางส่งได้เฉพาะผ่าน list_prices_from (ลูกค้าถามราคากว้างๆ) ครั้งเดียวต่อบทสนทนา
+            // จำสถานที่ที่ระบบยังไม่รู้จักเข้าย่านที่ลูกค้าบอก (หรือที่ Gemini มั่นใจ) — ไม่ทำให้การตอบล้มถ้าบันทึกไม่ได้
+            await learnPlace(args, lp, userTexts).catch((err) => log.warn('gemini.learn_place_failed', { err: (err as Error).message }));
             if (result.status === 'ok' && typeof result.price === 'number') {
               priceQuoted = { price: result.price };
             }
