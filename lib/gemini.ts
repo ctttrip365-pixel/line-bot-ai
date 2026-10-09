@@ -6,6 +6,7 @@ import type { Content } from '@google/genai';
 import { lookupPrice, groupOptions, priceMenu, offersAlreadyMade, tourOfferText, zonesInText, zoneLabelTh } from './prices';
 import type { PriceLookupResult } from './prices';
 import { recordPlaceZone } from './place-zones';
+import { isAirportPickup } from './calendar';
 import { norm } from './text-norm';
 import { searchFaq, faqCategories } from './faq';
 import { log } from './log';
@@ -91,6 +92,34 @@ export function guardLargeGroup(reply: string, lang: 'thai' | 'english' | 'other
       ? 'กลุ่มนี้พี่แชมป์จะจัดรถตามที่เลือกและยืนยันการจองพร้อมแจ้งวิธีชำระเงินให้ครับ'
       : 'For this group size, Champ will arrange the vehicles, confirm your booking and send the payment details shortly.';
   return `${out}\n\n${tail}\n[HANDOFF]`;
+}
+
+/**
+ * ตัดประโยคปิดท้ายซ้ำๆ "มีอะไรให้น้องอันดาช่วยอีกไหมครับ" (แชมป์: ขึ้นซ้ำทุกข้อความน่าเบื่อ — 8 ต.ค. 2026)
+ * ตัดเฉพาะท้ายข้อความ และเฉพาะเมื่อยังมีเนื้อหาเหลือพอ (ทักทายสั้นๆ ที่มีแต่ประโยคนี้ไม่ตัด); [HANDOFF] ท้ายสุดยังอยู่
+ */
+export function stripGenericClosing(text: string): string {
+  const closer =
+    '(?:มีอะไร(?:เพิ่มเติม)?ให้(?:น้องอันดา|ผม|เรา)ช่วย(?:เพิ่มเติม|อีก)?(?:ไหม|หรือไม่)(?:ครับ|คะ|ค่ะ)?\\s*\\??|Is there anything else (?:I|Anda) can help (?:you )?with(?: today)?\\s*\\?|Is there anything else\\s*\\?|How else can I help you\\??)';
+  const re = new RegExp('\\s*' + closer + '(\\s*\\[HANDOFF\\])?\\s*$', 'i');
+  const out = text.replace(re, (_m, h) => (h ? '\n' + String(h).trim() : '')).trimEnd();
+  return out.replace(/\[HANDOFF\]/g, '').trim().length >= 15 ? out : text;
+}
+
+/** จุดรับไม่ใช่สนามบิน → ลบข้อความที่ขอ "หมายเลขเที่ยวบิน" ออกจากคำตอบ (เจอจริง: รับจากโรงแรมไปสนามบิน บอทขอเที่ยวบิน) */
+export function stripFlightAsk(text: string): string {
+  return text
+    .replace(/\s*(?:[,，]\s*)?(?:และ|พร้อม(?:กับ)?|กับ)?\s*หมายเลขเที่ยวบิน\s*(?:\(ถ้า[^)]*\)\s*)?(?:ด้วย)?/g, '')
+    .replace(/(แจ้ง|ขอ)\s*(?:และ|กับ|พร้อม(?:กับ)?)\s*/g, '$1')
+    .replace(/\s*(?:and|,)?\s*(?:your\s+)?flight number(?:\s*\(if[^)]*\))?/gi, '')
+    .replace(/[ \t]{2,}/g, ' ');
+}
+
+/** ข้อความลูกค้าบอกว่า "ไปสนามบิน" โดยไม่ได้รับจากสนามบิน → จุดรับไม่ใช่สนามบิน (ทางสำรองเมื่อ Gemini ถามก่อนเรียก lookup_price) */
+export function toAirportOnly(text: string): boolean {
+  const toAirport = /(?:ไป|ส่ง(?:ที่)?|to)\s*(?:ที่\s*)?(?:สนามบิน|(?:the\s+)?(?:krabi\s+)?airport)/i.test(text);
+  const fromAirport = /(?:จาก|from)\s*(?:สนามบิน|(?:the\s+)?(?:krabi\s+)?airport)|(?:สนามบิน|airport)[^\n]{0,25}(?:ไป|to)\s/i.test(text);
+  return toAirport && !fromAirport;
 }
 
 export const DEFAULT_REPLY_EN =
@@ -274,6 +303,7 @@ export async function generateReply(
       'ส่งตารางราคาให้ลูกค้าไปแล้วในบทสนทนานี้ ห้ามส่งซ้ำ ห้ามเสนอทัวร์ซ้ำ — ถามเฉพาะข้อมูลที่ยังขาด (จุดส่ง/โรงแรม จำนวนคน วัน เวลา) หรือถ้ายังหาราคาเส้นทางไม่ได้ให้ถามย่านของสถานที่นั้น แล้วค่อยเรียก lookup_price ใหม่',
   };
   let priceQuoted: { price: number } | null = null;
+  let lastLookupOrigin = ''; // จุดรับล่าสุดที่ Gemini ใช้ค้นราคา — ใช้ตัดสินว่าต้องขอเที่ยวบินไหม
 
   const MAX_TOOL_ROUNDS = 3;
   let response = await callModel(ai, contents, systemPrompt, tools);
@@ -327,6 +357,11 @@ export async function generateReply(
             const args = (call.args ?? {}) as { origin?: string; destination?: string; pax?: number | string; date?: string; time?: string };
             const lp = await lookupPrice(String(args.origin ?? ''), String(args.destination ?? ''), Number(args.pax));
             result = { ...lp };
+            lastLookupOrigin = String(args.origin ?? '');
+            if (!isAirportPickup(lastLookupOrigin)) {
+              // จุดรับไม่ใช่สนามบิน → ไม่ต้องขอเที่ยวบิน (ขอแค่เบอร์โทร)
+              result.instruction = ((result.instruction as string | undefined) ? result.instruction + ' ' : '') + 'จุดรับไม่ใช่สนามบิน: ห้ามถามหมายเลขเที่ยวบินเด็ดขาด ขอแค่เบอร์โทรติดต่อ';
+            }
             const dateTimeKnown = String(args.date ?? '').trim() !== '' && String(args.time ?? '').trim() !== '';
             if (result.status === 'ok' && askedPrice && !dateTimeKnown) {
               // ลูกค้าถามราคา ตอบราคาได้ แต่ยังไม่ครบวัน/เวลา → ห้ามใช้แบบฟอร์ม "สรุปการจอง" (ให้แสดงเมื่อครบ 5 อย่างเท่านั้น)
@@ -400,7 +435,9 @@ export async function generateReply(
     if (menuText) return `${lang === 'thai' ? 'ราคารถรับ-ส่งตามนี้ครับ' : 'Here are our transfer prices:'}\n\n${menuText}`;
     throw new Error('gemini_empty_response');
   }
-  const reply = guardLargeGroup(stripMarkdown(extractReply(raw) ?? ''), lang);
+  let reply = guardLargeGroup(stripMarkdown(extractReply(raw) ?? ''), lang);
+  if ((lastLookupOrigin && !isAirportPickup(lastLookupOrigin)) || (!lastLookupOrigin && toAirportOnly(userMessage))) reply = stripFlightAsk(reply);
+  reply = stripGenericClosing(reply);
   if (!reply) {
     log.warn('gemini.reply_unusable', { lang, startsWith: raw.slice(0, 20) });
     if (menuText) return `${lang === 'thai' ? 'ราคารถรับ-ส่งตามนี้ครับ' : 'Here are our transfer prices:'}\n\n${menuText}`;

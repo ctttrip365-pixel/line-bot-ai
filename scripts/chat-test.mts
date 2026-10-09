@@ -4,7 +4,8 @@
 process.env.SHEET_CSV_URL ??= 'https://docs.google.com/spreadsheets/d/1zdqxnmr30lIYq-5lQamEDyjPl6YiUYExhIUJmVpjONk/export?format=csv';
 // ข้อมูลบัญชีทดสอบ (ปลอม) — ของจริงอยู่ใน env BANK_TRANSFER_INFO บน Vercel เท่านั้น ห้ามใส่ลงไฟล์ (repo เป็น public)
 process.env.BANK_TRANSFER_INFO ??= 'ธนาคารทดสอบ เลขบัญชี 000-0-00000-0 ชื่อบัญชี ทดสอบ ระบบ';
-const { generateReply } = await import('../lib/gemini');
+const { generateReply, DEFAULT_REPLY, DEFAULT_REPLY_EN } = await import('../lib/gemini');
+const { isLaughterOnly } = await import('../lib/chat-filters');
 
 if (!process.env.GEMINI_API_KEY) {
   console.error('ยังไม่ได้ตั้ง GEMINI_API_KEY');
@@ -98,13 +99,18 @@ const menuCases: { name: string; msg: string; history?: { role: 'user' | 'model'
 // สถานการณ์ = ลูกค้าพิมพ์ทีละข้อความ ประวัติแชทต่อกันเหมือน LINE จริง (history ส่งกลับเข้า generateReply ทุกรอบ)
 // ตัวเลขราคาอ่านจากชีตราคาจริงตอนรัน (ไม่ hardcode) — ถ้าแชมป์แก้ราคา ชุดนี้ตามอัตโนมัติ
 type Turn = { say: string; check?: (reply: string) => string[] };
-type Scenario = { id: string; name: string; turns: Turn[]; checkAll?: (replies: string[]) => string[] };
+type Scenario = { id: string; name: string; turns: Turn[]; checkAll?: (replies: string[]) => string[]; each?: (reply: string) => string[] };
 
 const { lookupPrice } = await import('../lib/prices');
 const p2 = await lookupPrice('สนามบินกระบี่', 'Ao Nang', 2);
 const p5 = await lookupPrice('สนามบินกระบี่', 'Ao Nang', 5);
 const PRICE2 = p2.status === 'ok' ? p2.price : NaN; // อ่าวนาง 1-3 คน
 const PRICE5 = p5.status === 'ok' ? p5.price : NaN; // อ่าวนาง 4-9 คน
+const pk9 = await lookupPrice('Phuket Airport', 'Ao Nang', 9);
+const PHK9 = pk9.status === 'ok' ? pk9.price : NaN; // สนามบินภูเก็ต → อ่าวนาง 9 คน (ราคาขายลูกค้า)
+const { groupOptions } = await import('../lib/prices');
+const pk12: any = await groupOptions('Phuket Airport', 'Ao Nang', 12);
+const PHK12 = pk12.status === 'ok' ? pk12.vans.total : NaN; // รถตู้ 2 คัน 12 คน
 const fmtP = (n: number) => n.toLocaleString('en-US');
 const hasPrice = (r: string, n: number) => r.includes(fmtP(n)) || r.includes(String(n));
 
@@ -326,6 +332,55 @@ const salesScenarios: Scenario[] = [
       { say: 'ขอเบอร์คนขับหน่อย', check: (r) => need(r.includes('94 269 4651') || r.includes('942694651'), 'ให้เบอร์ +66 94 269 4651') },
       { say: 'ผมมีผู้โดยสารที่เดินไม่ได้ ต้องใช้รถเข็น', check: (r) => need(/สายการบิน/.test(r) && /โรงแรม/.test(r), 'สายการบินช่วยจนถึงรถตู้ หลังจากนั้นขึ้นกับโรงแรม') },
       { say: 'ขอดูรูปรถหน่อย', check: (r) => need(r.includes('[HANDOFF]') || /ส่งรูป/.test(r), 'พี่แชมป์จะส่งรูปรถให้ (ส่งต่อ)') },
+      { say: 'ช่วยหาที่พักให้หน่อย มีโรงแรมหรือวิลล่าไหม', check: (r) => need(/94\s?269\s?4651/.test(r) && /LINE|ไลน์/.test(r), 'ที่พัก: ให้โทรพี่แชมป์ +66 94 269 4651 และบอกว่ามาจากแชท LINE') },
+    ],
+  },
+  {
+    id: 'S22',
+    name: 'S22 เล่นซ้ำคำถามจริงของเพื่อนทดสอบ 37 ข้อความตามลำดับในแคป (บทสนทนาเดียวต่อเนื่อง ประวัติ 40 ข้อความ) — ต้องไม่ตกไปตอบ fallback "ขอเวลาเช็ค", ไม่แต่งข้อมูล, ตอบตามที่แชมป์ให้',
+    each: (r) => [
+      ...(r.trim() === DEFAULT_REPLY || r.trim() === DEFAULT_REPLY_EN ? ['ตอบข้อความ fallback "ขอเวลาเช็ค…" (ไม่ควร)'] : []),
+      ...noRudeBack(r), ...noPromptLeak(r), ...noSystemNotFound(r),
+      ...(/มีอะไร(เพิ่มเติม)?ให้น้องอันดาช่วย(เพิ่มเติม|อีก)?ไหมครับ\s*$/.test(r.replace(/\[HANDOFF\]/g, '').trim()) ? ['ปิดท้ายด้วยประโยคซ้ำ "มีอะไรให้น้องอันดาช่วยอีกไหมครับ"'] : []),
+    ],
+    turns: [
+      { say: 'Hello' },
+      { say: 'Phuket airport to Ao nang Krabi' },
+      { say: '9 pax', check: (r) => (/(more than (one|1) van|หลายคัน|2 คัน|สองคัน)/i.test(r) ? ['บอกว่า 9 คนต้องใช้หลายคัน (ที่ถูกคือนั่งคันเดียวได้ 9 คน)'] : []) },
+      { say: '555' },
+      { say: 'I need a 12-seater vehicle.', check: (r) => (/more than 8|เกิน 8/i.test(r) ? ['ยังใช้เพดาน 8 คนเดิม'] : []) },
+      { say: 'How much', check: (r) => [...need(hasPrice(r, PHK12), `กลุ่ม 12 คน ต้องเสนอรถตู้ 2 คัน = ${fmtP(PHK12)}`), ...need(/เก๋ง|SUV|sedan|\bcar\b/i.test(r), 'ต้องเสนอรถตู้ + เก๋ง/SUV อีกทาง')] },
+      { say: 'แก้เป็นเราแนะนำให้ใช้ 1 van 1 car หรือ 2van ในราคาพิเศษ' },
+      { say: 'ฉันขอจอดทานข้าวในเส้นทาง มีค่าใช้จ่ายไหม?', check: (r) => need(r.includes('100') && /15/.test(r), 'แวะฟรี 15 นาที เกินแล้ว 100 (+ชม.ละ 100)') },
+      { say: 'ต้องการเก้าอี้เด็ก 2 ตัว ต้องจ่ายเพิ่มไหม?', check: (r) => need(/ฟรี|free/i.test(r), 'เก้าอี้เด็ก 2 ตัวฟรี') },
+      { say: '5555' },
+      { say: 'เครื่องดีเลย์ คุณต้องรอฉันอีก 3 ชม', check: (r) => [...need(/30/.test(r) && r.includes('100'), 'รอฟรี 30 นาที แล้วชั่วโมงละ 100'), ...(/\b(200|250|300)\s*บาท/.test(r) ? ['คำนวณยอดค่ารอเอง (ห้าม — แชมป์ยังไม่ได้กำหนดวิธีปัดเศษ)'] : [])] },
+      { say: 'คุณคิดค่ารอไหม รอ ชม.ละเท่าไหร่', check: (r) => need(r.includes('100'), 'ค่ารอชั่วโมงละ 100') },
+      { say: 'ฉันมาถึงสนามบินแล้ว ตอนนี้ฉันรออยู่ที่ทางออกประตู 90', check: (r) => need(/15/.test(r), 'จุดนัดรับสนามบินกระบี่ ประตูทาง 15 (หรือโทรหาพี่แชมป์)') },
+      { say: 'เมื่อรู้เลขไฟล์ จะรู้ว่าลูกค้าควรไปประตูไหน' },
+      { say: 'มันคือสิ่งที่ต้องเจอ' },
+      { say: 'มีเบอร์โทรคนขับรถไหม?', check: (r) => need(/94\s?269\s?4651/.test(r), 'ให้เบอร์ +66 94 269 4651') },
+      { say: 'ตอนนี้มีหนึ่งในผู้โดยสารเดินไม่ได้ คุณช่วยประสานงานเก้าอี้เข็นคนเจ็บหน่อย', check: (r) => need(/สายการบิน|รถเข็น/.test(r), 'ตอบเรื่องรถเข็น (สายการบินดูแลถึงรถตู้ หลังจากนั้นขึ้นกับโรงแรม)') },
+      { say: 'อัดให้มันฉลาดขึ้น' },
+      { say: 'ตอนนี้ฉันรอมานานมากแล้ว รถจะมารับอีกกี่นาที', check: (r) => need(/94\s?269\s?4651/.test(r), 'เร่งด่วนหน้างาน → ให้โทร +66 94 269 4651') },
+      { say: 'ขอวงานหน่อย', check: (r) => need(/ctt\.trip365@gmail\.com|94\s?269\s?4651|พี่แชมป์/.test(r), 'ช่องทางร่วมงาน/ส่งต่อพี่แชมป์') },
+      { say: '😄😄😄' },
+      { say: 'เราสนใจจะเป็นรถวิ่งร่วมกับคุณได้ไหม', check: (r) => need(/ctt\.trip365@gmail\.com|94\s?269\s?4651|พี่แชมป์/.test(r), 'ช่องทางร่วมงาน/ส่งต่อพี่แชมป์') },
+      { say: 'มีช่องทางการวางคอนแทคอย่างไรบ้าง', check: (r) => need(/gmail|94\s?269\s?4651|@ctt/.test(r), 'ให้ช่องทางติดต่อ') },
+      { say: 'อ่าว เผื่อเอเจนสนใจไง' },
+      { say: 'ต้องมีช่องทางคอนแทคเบอร์โทอีเมลและช่องทางอื่น', check: (r) => need(/ctt\.trip365@gmail\.com/.test(r) && /94\s?269\s?4651/.test(r), 'ต้องให้ทั้งอีเมลและเบอร์โทร') },
+      { say: 'อ่านะ' },
+      { say: 'มีโรงแรมไหม' },
+      { say: 'เช่ารถตู้พร้อมคนขับ รานวันเท่าไหร่' },
+      { say: 'กระบี่ 1 วัน กี่บาท', check: (r) => need(/2,?500/.test(r) && /3,?000/.test(r) && /3,?500/.test(r), 'ราคาเช่า 8/10/12 ชม. = 2,500 / 3,000 / 3,500') },
+      { say: 'ต้องการราคารถตู้ 8 ชม 10 ชม 12 ชม', check: (r) => need(/2,?500/.test(r) && /3,?000/.test(r) && /3,?500/.test(r), 'ราคาเช่า 8/10/12 ชม.') },
+      { say: 'ไม่ราคาไม่รวมน้ำมัน', check: (r) => need(/รวมน้ำมัน/.test(r), 'ต้องบอกว่ารวมน้ำมันแล้ว ไม่มีแพ็กเกจแยก') },
+      { say: 'มีรถแบบไหนบ้าง', check: (r) => need(/SUV|เก๋ง|ตู้/.test(r), 'ตอบประเภทรถ (ตู้/SUV/เก๋ง)') },
+      { say: 'ฉันถามว่าคุณมีบริการรถอะไรบ้าง', check: (r) => need(/SUV|เก๋ง|ตู้/.test(r), 'ตอบประเภทรถ') },
+      { say: 'Car SUV Van' },
+      { say: 'ขอรูปรถหน่อย', check: (r) => need(/รูป|photo/i.test(r), 'ตอบเรื่องรูปรถ (ระบบจริงส่งรูป 4 รูป)') },
+      { say: 'รถของคุณปีอะไร', check: (r) => [...(/(19|20)\d{2}|25\d{2}/.test(r) ? ['แต่งปีรถ (ไม่มีข้อมูล)'] : []), ...need(/พี่แชมป์|ส่งต่อ|\[HANDOFF\]/.test(r), 'ไม่มีข้อมูลปีรถ → ส่งต่อพี่แชมป์')] },
+      { say: 'ฉันต้องการล่าม หรือคนขับรถที่เป็นภาษา', check: (r) => need(r.includes('600'), 'ล่าม 600 บาทต่อรอบ') },
     ],
   },
   {
@@ -362,10 +417,14 @@ async function runSales(only?: string) {
     const problems: string[] = [];
     for (const [i, turn] of sc.turns.entries()) {
       try {
-        const out = await generateReply(turn.say, '', history);
+        if (isLaughterOnly(turn.say)) {
+          console.log(`\n[${i + 1}] ลูกค้า: ${turn.say}\n    บอท: (เงียบ — เสียงหัวเราะล้วน ระบบไม่ตอบ) ✔`);
+          continue;
+        }
+        const out = await generateReply(turn.say, '', history.slice(-40)); // ระบบจริงเก็บประวัติ 40 ข้อความล่าสุด
         replies.push(out);
         history.push({ role: 'user', text: turn.say }, { role: 'model', text: out });
-        const issues = [...(turn.check ? turn.check(out) : []), ...noOldName(out), ...noFemaleParticle(out)];
+        const issues = [...(turn.check ? turn.check(out) : []), ...noOldName(out), ...noFemaleParticle(out), ...(sc.each ? sc.each(out) : [])];
         console.log(`\n[${i + 1}] ลูกค้า: ${turn.say}\n    บอท: ${out.replace(/\n/g, '\n         ')}`);
         for (const m of issues) console.log(`    ❌ ${m}`);
         problems.push(...issues.map((m) => `รอบ ${i + 1}: ${m}`));

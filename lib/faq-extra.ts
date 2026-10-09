@@ -23,6 +23,30 @@ export const EXTRA_FAQ: ExtraFaqRow[] = [
     question: 'How much is the 4-Island tour in Krabi?',
     answer: 'The 4-Island tour (speedboat) is 800 THB per person, visiting Koh Poda, Chicken Island, the Tup Island sandbar (Unseen Thailand), Emerald Cave and a beautiful beach.',
   },
+  // ---- ตำแหน่งโรงแรม (แชมป์ยืนยัน 8 ต.ค. 2026: De Malee Krabi อยู่แถวคลองแห้ง อ่าวนาง → คิดราคาย่านอ่าวนาง) ----
+  {
+    category: 'การรับ-ส่ง (Airport Transfer)',
+    question: 'De Malee Krabi อยู่ที่ไหน อยู่อ่าวนางหรือคลองแห้ง โรงแรมเดอมาลี',
+    answer: 'De Malee Krabi อยู่แถวคลองแห้ง อ่าวนางครับ คิดราคาตามย่านอ่าวนาง',
+  },
+  {
+    category: 'Airport Transfer',
+    question: 'Where is De Malee Krabi hotel? Is it in Ao Nang or Klong Haeng?',
+    answer: 'De Malee Krabi is in the Klong Haeng area of Ao Nang. We price it as the Ao Nang zone.',
+  },
+  // ---- ที่พัก (แชมป์ยืนยัน 8 ต.ค. 2026: CTT รู้จักหลายโรงแรมและวิลล่า — ต้องการที่พักให้โทรหาแชมป์โดยตรง บอกว่ามาจากแชท LINE) ----
+  {
+    category: 'ที่พัก',
+    question: 'มีโรงแรมไหม มีที่พักไหม มีวิลล่าไหม ช่วยหาที่พักให้ได้ไหม แนะนำโรงแรม',
+    answer:
+      'CTT รู้จักโรงแรมและวิลล่าหลายแห่งครับ ถ้าต้องการที่พัก รบกวนโทรติดต่อพี่แชมป์โดยตรงที่ +66 94 269 4651 และแจ้งว่ามาจากแชท LINE ครับ',
+  },
+  {
+    category: 'Accommodation',
+    question: 'Do you have hotels or villas? Can you help me find accommodation? hotel recommendation',
+    answer:
+      'CTT knows many hotels and villas. If you need accommodation, please call Champ directly at +66 94 269 4651 and let him know you are contacting from the LINE chat.',
+  },
   // ---- ชุดที่ 2 (แชมป์ตอบ 8 ต.ค. 2026): ค่าบริการเสริม / หน้างาน / ล่าม ---- (ตัวเลขเหล่านี้เป็นราคาขายลูกค้า ไม่บวก 15%)
   {
     category: 'ค่าบริการเสริม',
@@ -90,13 +114,13 @@ export const EXTRA_FAQ: ExtraFaqRow[] = [
   },
   {
     category: 'ปัญหาหน้างาน',
-    question: 'จุดนัดรับที่สนามบินกระบี่ รอตรงไหน ประตูไหน ทางออกไหน เจอกันที่ไหน',
-    answer: 'จุดนัดรับที่สนามบินกระบี่คือ ประตูทาง 15 ครับ',
+    question: 'จุดนัดรับที่สนามบินกระบี่ รอตรงไหน ประตูไหน ทางออกไหน เจอกันที่ไหน เที่ยวบินนี้ไปประตูไหน',
+    answer: 'จุดนัดรับที่สนามบินกระบี่มีจุดเดียวคือ ประตูทาง 15 ครับ ใช้เหมือนกันทุกเที่ยวบิน (แจ้งหมายเลขเที่ยวบินไว้เพื่อให้เรากำหนดเวลารับได้ถูกต้อง ไม่ได้ใช้เลือกประตู)',
   },
   {
     category: 'On-site issues',
     question: 'Where is the meeting point at Krabi Airport? Which door or exit should I wait at?',
-    answer: 'The meeting point at Krabi Airport is Door 15.',
+    answer: 'There is only one meeting point at Krabi Airport: Door 15, the same for every flight. (We ask for your flight number only so we can set the pickup time correctly, not to choose a door.)',
   },
   {
     category: 'ประเภทรถ',
