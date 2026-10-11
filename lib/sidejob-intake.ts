@@ -47,6 +47,7 @@ const TTL_PENDING = 2 * 24 * 3600;
 const TTL_CARD = 90 * 24 * 3600;
 const TTL_AWAIT = 6 * 3600; // รอตัวเลขค่าใช้จ่ายเพิ่มหลังกด 💰 — สั้นไว้ กันตัวเลขอื่นๆ ที่พิมพ์ทีหลังถูกอ่านผิดเป็นค่าใช้จ่าย
 const MAX_JOBS_PER_MESSAGE = 10;
+const MAX_LEGS_TO_PICK = 12;
 const MAX_FILES = 6;
 const MEDIA_GROUP_WAIT_MS = 5000;
 
@@ -57,6 +58,18 @@ interface IncomingFile {
 interface Pending {
   text: string;
   files: IncomingFile[];
+  forcedOwnerId?: string;
+  jobs?: ExtractedJob[]; // งานที่อ่าน/เลือกไว้แล้ว (ถ้ามี = ไม่ต้องให้ AI อ่านซ้ำตอนกลับมาทำต่อ)
+}
+
+/** ใบจองหลายเที่ยวที่แชมป์ไม่ได้ระบุว่าขับข้อไหน — รอแชมป์ติ๊กเลือกก่อนบันทึก */
+interface LegPick {
+  jobs: ExtractedJob[];
+  selected: number[];
+  priced: boolean[]; // เส้นทางนี้มีราคาในตารางไหม (บอกใบ้ว่าเป็นงานของ CTT)
+  text: string;
+  files: IncomingFile[];
+  prefixOwnerId?: string;
   forcedOwnerId?: string;
 }
 
@@ -166,8 +179,11 @@ export async function handleIntake(
   }
 
   let jobs: ExtractedJob[];
+  let selectionStated = true;
   try {
-    jobs = (await extract({ text, files, ownerNames: owners.map((o) => o.display_name), today })).jobs;
+    const r = await extract({ text, files, ownerNames: owners.map((o) => o.display_name), today });
+    jobs = r.jobs;
+    selectionStated = r.selectionStated;
   } catch (err) {
     log.error('sidejob_intake.extract_failed', { err: (err as Error).message });
     await sendTelegramMessage('❌ ให้ AI อ่านงานไม่สำเร็จ (ระบบ AI ขัดข้องชั่วคราว) — ยังไม่ได้บันทึกอะไร ลองส่งใหม่อีกครั้งครับ');
@@ -181,7 +197,29 @@ export async function handleIntake(
     return;
   }
 
-  const forced = input.forcedOwnerId ? owners.find((o) => o.owner_id === input.forcedOwnerId) ?? null : null;
+  const ctx: ProcessCtx = { owners, prefixOwner: prefix.owner, forcedOwnerId: input.forcedOwnerId, text: input.text, files: input.files, isRetry: !!input.isRetry };
+
+  // ใบจองหลายเที่ยวแต่แชมป์ไม่ได้ระบุข้อ → ไม่บันทึกเอง ถามก่อน (ใบจองมักมีเที่ยวของทีมอื่น/จังหวัดอื่นปนอยู่)
+  if (jobs.length > 1 && !selectionStated) {
+    await askWhichLegs(jobs, ctx);
+    return;
+  }
+  await processJobs(jobs, ctx);
+}
+
+interface ProcessCtx {
+  owners: Owner[];
+  prefixOwner: Owner | null;
+  forcedOwnerId?: string;
+  text: string; // ข้อความต้นฉบับของแชมป์ (เก็บเป็นหลักฐาน/ใช้ถามกลับ)
+  files: IncomingFile[];
+  isRetry: boolean;
+}
+
+/** งานที่เลือกแล้ว → แยก พร้อมบันทึก / ไม่รู้เจ้าของ / ข้อมูลไม่ครบ แล้วทำตามนั้น */
+async function processJobs(jobs: ExtractedJob[], ctx: ProcessCtx): Promise<void> {
+  const owners = ctx.owners;
+  const forced = ctx.forcedOwnerId ? owners.find((o) => o.owner_id === ctx.forcedOwnerId) ?? null : null;
   const ready: Array<{ job: ExtractedJob; owner: Owner }> = [];
   const needOwner: ExtractedJob[] = [];
   const incomplete: Array<{ job: ExtractedJob; missing: string[] }> = [];
@@ -196,7 +234,7 @@ export async function handleIntake(
       continue;
     }
     // ลำดับความสำคัญ: ชื่อที่แชมป์พิมพ์นำหน้า > ชื่อที่อ่านเจอในงานนั้น > เจ้าของที่แชมป์กดเลือก
-    const owner = prefix.owner ?? resolveOwner(j.owner_hint, owners) ?? forced;
+    const owner = ctx.prefixOwner ?? resolveOwner(j.owner_hint, owners) ?? forced;
     if (!owner) {
       needOwner.push(j);
       continue;
@@ -216,7 +254,7 @@ export async function handleIntake(
       await sendTelegramMessage('❌ อ่านชีตไม่ได้ (Apps Script ไม่ตอบ) — ยังไม่ได้บันทึกอะไร ลองส่งใหม่อีกครั้งครับ ระบบกันซ้ำให้');
       return;
     }
-    const fileIds = input.files.map((f) => f.file_id);
+    const fileIds = ctx.files.map((f) => f.file_id);
     for (const { job, owner } of ready) {
       const r = await addSideJob(
         {
@@ -229,14 +267,14 @@ export async function handleIntake(
           origin: job.origin,
           destination: job.destination,
           source_file_ids: fileIds,
-          raw_text: (input.text || '').slice(0, 1000),
+          raw_text: (ctx.text || '').slice(0, 1000),
         },
         existing
       );
       if (r.ok) {
         await sendCard(r.job, owners, r.priceNote);
       } else if (r.reason === 'duplicate') {
-        if (!input.isRetry) {
+        if (!ctx.isRetry) {
           await sendTelegramMessage(
             `⚠️ <b>งานนี้บันทึกไว้แล้ว ไม่ได้ลงซ้ำ</b>\n${escapeHtml(ownerName(owners, r.existing.owner_id))} | ${escapeHtml(r.existing.job_date)} | ${escapeHtml(r.existing.booking_ref || r.existing.guest_name || '-')} | ${escapeHtml(r.existing.origin)} → ${escapeHtml(r.existing.destination)}\n<code>${escapeHtml(r.existing.job_id)}</code>`
           );
@@ -252,7 +290,7 @@ export async function handleIntake(
   // ---- ไม่รู้เจ้าของงาน → ถามด้วยปุ่ม (เก็บข้อความ+ไฟล์ไว้ ไม่ต้องส่งใหม่)
   if (needOwner.length > 0) {
     const token = newToken();
-    const pend: Pending = { text: input.text, files: input.files, forcedOwnerId: input.forcedOwnerId };
+    const pend: Pending = { text: ctx.text, files: ctx.files, forcedOwnerId: ctx.forcedOwnerId, jobs: needOwner };
     const saved = await redisSet(`sj:pend:${token}`, pend, TTL_PENDING);
     if (!saved) {
       await sendTelegramMessage('❌ ระบบจำสถานะไม่ได้ (Redis ขัดข้อง) — ลองส่งใหม่พร้อมพิมพ์ชื่อเพื่อนนำหน้า เช่น "จากชื่อเพื่อน:" ครับ');
@@ -272,10 +310,93 @@ export async function handleIntake(
       .join('\n');
     const mid = await sendTelegramMessage(`❓ <b>ข้อมูลไม่ครบ ยังไม่ได้บันทึก ${incomplete.length} งาน</b>\n${list}\n\nreply ข้อความนี้พร้อมข้อมูลที่ขาด (เช่น "วันที่ 20/11") ได้เลยครับ`);
     if (mid) {
-      const pend: Pending = { text: input.text, files: input.files, forcedOwnerId: prefix.owner?.owner_id ?? input.forcedOwnerId };
+      const pend: Pending = { text: ctx.text, files: ctx.files, forcedOwnerId: ctx.prefixOwner?.owner_id ?? ctx.forcedOwnerId };
       await redisSet(`sj:ask:${mid}`, pend, TTL_PENDING);
     }
   }
+}
+
+// ---------------------------------------------------------------- ใบจองหลายเที่ยว: ให้แชมป์ติ๊กเลือกว่าขับข้อไหน
+
+const dayMonth = (d: string | null): string => (d ? `${Number(d.slice(8))}/${Number(d.slice(5, 7))}` : '?/?');
+
+function renderLegs(token: string, pick: LegPick): { text: string; buttons: InlineButton[][] } {
+  const shown = pick.jobs.slice(0, MAX_LEGS_TO_PICK);
+  const lines = shown.map((j, i) => {
+    const mark = pick.selected.includes(i) ? '☑️' : '☐';
+    return `${mark} <b>${i + 1})</b> ${dayMonth(j.date)}${j.time ? ` ${escapeHtml(j.time)}` : ''} ${pick.priced[i] ? '💰 ' : ''}${escapeHtml(j.origin || '?')} → ${escapeHtml(j.destination || '?')}`;
+  });
+  const text = [
+    `🧩 <b>ใบจองนี้มี ${pick.jobs.length} ข้อ — แชมป์ขับข้อไหนครับ?</b> (ยังไม่ได้บันทึก)`,
+    'กดเลือกได้หลายข้อ แล้วกด ✅ บันทึก (💰 = เส้นทางที่มีราคาในตารางของ CTT)',
+    '',
+    ...lines,
+    ...(pick.jobs.length > shown.length ? [`…และอีก ${pick.jobs.length - shown.length} ข้อที่ไม่ได้แสดง`] : []),
+  ].join('\n');
+
+  const toggles: InlineButton[] = shown.map((_, i) => ({
+    text: `${pick.selected.includes(i) ? '☑️' : '☐'} ${i + 1}`,
+    callback_data: `sj_legtog:${token}:${i}`,
+  }));
+  const rows: InlineButton[][] = [];
+  for (let i = 0; i < toggles.length; i += 4) rows.push(toggles.slice(i, i + 4));
+  rows.push([
+    { text: `✅ บันทึกที่เลือก (${pick.selected.length})`, callback_data: `sj_legok:${token}` },
+    { text: 'ทุกข้อ', callback_data: `sj_legall:${token}` },
+  ]);
+  return { text, buttons: rows };
+}
+
+async function askWhichLegs(jobs: ExtractedJob[], ctx: ProcessCtx): Promise<void> {
+  const priced = await Promise.all(
+    jobs.map(async (j) => {
+      if (!j.origin || !j.destination) return false;
+      try {
+        return (await lookupAgentPrice(j.origin, j.destination, j.pax ?? 2)).price !== '';
+      } catch {
+        return false;
+      }
+    })
+  );
+  const token = newToken();
+  const pick: LegPick = {
+    jobs: jobs.slice(0, MAX_LEGS_TO_PICK),
+    selected: [],
+    priced,
+    text: ctx.text,
+    files: ctx.files,
+    prefixOwnerId: ctx.prefixOwner?.owner_id,
+    forcedOwnerId: ctx.forcedOwnerId,
+  };
+  if (!(await redisSet(`sj:legs:${token}`, pick, TTL_PENDING))) {
+    await sendTelegramMessage('❌ ระบบจำสถานะไม่ได้ (Redis ขัดข้อง) — ลองส่งใหม่พร้อมบอกข้อที่ขับ เช่น "ข้อ 2" ครับ');
+    return;
+  }
+  const { text, buttons } = renderLegs(token, pick);
+  const mid = await sendTelegramMessage(`${text}\n\nหรือ reply ข้อความนี้ว่า "ข้อ 2" / "ทุกข้อ" ก็ได้ครับ`, buttons);
+  // reply แทนการกดปุ่ม → อ่านใหม่พร้อมข้อความที่เติม (ใช้กลไกเดียวกับ "ข้อมูลไม่ครบ")
+  if (mid) await redisSet(`sj:ask:${mid}`, { text: ctx.text, files: ctx.files, forcedOwnerId: ctx.prefixOwner?.owner_id ?? ctx.forcedOwnerId } satisfies Pending, TTL_PENDING);
+}
+
+async function proceedWithLegs(token: string, pick: LegPick, indexes: number[], cqMid: number | undefined): Promise<void> {
+  let owners: Owner[];
+  try {
+    owners = await listOwners();
+  } catch {
+    await sendTelegramMessage('❌ อ่านรายชื่อเพื่อนจากชีตไม่ได้ (Apps Script ไม่ตอบ) — ยังไม่ได้บันทึกอะไร กดปุ่มอีกครั้งได้ครับ');
+    await redisSet(`sj:legs:${token}`, pick, TTL_PENDING); // คืนสถานะให้กดซ้ำได้
+    return;
+  }
+  const chosen = indexes.sort((a, b) => a - b).map((i) => pick.jobs[i]);
+  if (cqMid) await editTelegramMessage(cqMid, `⏳ กำลังบันทึก ${chosen.length} ข้อ: ${indexes.map((i) => i + 1).join(', ')}`, []);
+  await processJobs(chosen, {
+    owners,
+    prefixOwner: pick.prefixOwnerId ? owners.find((o) => o.owner_id === pick.prefixOwnerId) ?? null : null,
+    forcedOwnerId: pick.forcedOwnerId,
+    text: pick.text,
+    files: pick.files,
+    isRetry: false,
+  });
 }
 
 // ---------------------------------------------------------------- reply ที่การ์ด = แก้งาน
@@ -481,6 +602,38 @@ export async function handleSideJobCallback(cq: TelegramCallbackQuery, extract: 
       return true;
     }
 
+    if (action === 'sj_legtog' || action === 'sj_legok' || action === 'sj_legall') {
+      const key = `sj:legs:${a}`;
+      const pick = await redisGet<LegPick>(key);
+      if (!pick) {
+        await answerCallbackQuery(cq.id, 'หมดอายุหรือบันทึกไปแล้ว — ส่งใบจองใหม่ได้ครับ');
+        return true;
+      }
+      if (action === 'sj_legtog') {
+        const i = Number(b);
+        pick.selected = pick.selected.includes(i) ? pick.selected.filter((x) => x !== i) : [...pick.selected, i];
+        await redisSet(key, pick, TTL_PENDING);
+        await answerCallbackQuery(cq.id);
+        const { text, buttons } = renderLegs(a, pick);
+        if (mid) await editTelegramMessage(mid, `${text}\n\nหรือ reply ข้อความนี้ว่า "ข้อ 2" / "ทุกข้อ" ก็ได้ครับ`, buttons);
+        return true;
+      }
+      const indexes = action === 'sj_legall' ? pick.jobs.map((_, i) => i) : pick.selected;
+      if (indexes.length === 0) {
+        await answerCallbackQuery(cq.id, 'ยังไม่ได้เลือกข้อ — กดเลขข้อก่อนครับ');
+        return true;
+      }
+      // กันกดซ้ำ: ลบสถานะก่อนเริ่มบันทึก (ถ้าอ่านรายชื่อเพื่อนไม่ได้จะคืนสถานะให้)
+      try {
+        await getRedis().del(key);
+      } catch {
+        /* หมดอายุเอง */
+      }
+      await answerCallbackQuery(cq.id, 'กำลังบันทึก...');
+      await proceedWithLegs(a, pick, [...indexes], mid);
+      return true;
+    }
+
     if (action === 'sj_pick') {
       const pend = await redisGet<Pending>(`sj:pend:${a}`);
       if (!pend) {
@@ -489,7 +642,13 @@ export async function handleSideJobCallback(cq: TelegramCallbackQuery, extract: 
       }
       await answerCallbackQuery(cq.id, 'กำลังบันทึก...');
       if (mid) await editTelegramMessage(mid, '⏳ กำลังบันทึก...', []);
-      await handleIntake({ text: pend.text, files: pend.files, forcedOwnerId: b, isRetry: true }, extract);
+      if (pend.jobs?.length) {
+        // งานอ่านไว้แล้ว (ผ่านขั้นเลือกข้อมาแล้ว) → บันทึกต่อได้เลย ไม่ให้ AI อ่านซ้ำ ไม่ถามเลือกข้อซ้ำ
+        const owners = await listOwners();
+        await processJobs(pend.jobs, { owners, prefixOwner: null, forcedOwnerId: b, text: pend.text, files: pend.files, isRetry: true });
+      } else {
+        await handleIntake({ text: pend.text, files: pend.files, forcedOwnerId: b, isRetry: true }, extract);
+      }
       return true;
     }
   } catch (err) {

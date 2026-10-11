@@ -50,6 +50,7 @@ process.env.TELEGRAM_BOT_TOKEN = 'SIMTOKEN';
 process.env.TELEGRAM_CHAMP_CHAT_ID = '999';
 interface Sent { kind: 'send' | 'edit'; mid: number; text: string; buttons: Array<Array<{ text: string; callback_data: string }>> | undefined }
 const sent: Sent[] = [];
+const answers: string[] = []; // ข้อความตอบปุ่ม (toast) ที่บอทส่งกลับ
 let midCounter = 1000;
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: unknown, init?: { body?: string }) => {
@@ -68,6 +69,7 @@ globalThis.fetch = (async (input: unknown, init?: { body?: string }) => {
     sent.push({ kind: 'edit', mid: body.message_id, text: body.text, buttons: body.reply_markup?.inline_keyboard });
     return json({ ok: true, result: true });
   }
+  if (method === 'answerCallbackQuery') answers.push(String(body.text ?? ''));
   if (method === 'getFile') return json({ ok: true, result: { file_path: 'photos/f.jpg', file_size: 100 } });
   return json({ ok: true, result: true });
 }) as typeof fetch;
@@ -85,18 +87,32 @@ type Extractor = Parameters<typeof routeSideJobMessage>[1];
 // ---------- Gemini ปลอม: ตอบตามตัวอักษรชี้สถานการณ์ในข้อความ ----------
 const extractCalls: Array<{ text: string; files: number }> = [];
 const job = (o: Record<string, unknown>) => ({ owner_hint: '', booking_ref: '', guest_name: 'Sim Guest', pax: 2, date: '2026-11-18', time: '14:30', origin: 'Krabi Airport', destination: 'Ao Nang', ...o });
+const R = (jobs: ReturnType<typeof job>[], selectionStated = true) => ({ jobs, selectionStated });
+const leg = (ref: string, date: string, origin: string, destination: string) => job({ booking_ref: ref, date, origin, destination });
 const fake: Extractor = async (opts) => {
   extractCalls.push({ text: opts.text, files: opts.files.length });
   const t = opts.text;
-  if (t.includes('[A]')) return { jobs: [job({ booking_ref: 'SIM-A1' })] };
-  if (t.includes('[B]')) return { jobs: [job({ booking_ref: 'SIM-B1', date: '2026-11-19' })] };
-  if (t.includes('[C]')) return { jobs: [job({ booking_ref: 'SIM-C1', date: t.includes('ข้อมูลที่แชมป์เติมให้') ? '2026-11-20' : null })] };
-  if (t.includes('[D]')) return { jobs: [job({ booking_ref: 'SIM-D1', date: '2026-11-21', origin: 'Nowhere Hotel XYZ', destination: 'Unknown Beach Town' })] };
-  if (t.includes('[F]')) return { jobs: [job({ booking_ref: 'SIM-F1', date: '2026-10-01' })] };
-  if (t.includes('[G]')) return { jobs: [job({ booking_ref: 'SIM-G1', date: '2026-10-02' })] };
-  if (t.includes('[H]')) return { jobs: [job({ booking_ref: 'SIM-H1', date: '2026-10-03' })] };
-  if (t.includes('[E]')) return { jobs: [job({ booking_ref: 'SIM-E1', date: '2026-11-22' })] };
-  return { jobs: [] };
+  // ใบจองหลายเที่ยว: L/M/N/O/P (ราคาในตาราง = เที่ยวที่เป็นงานของ CTT)
+  const legs = (ref: string, base: number) => [
+    leg(ref, `2026-12-0${base}`, 'Krabi Airport', 'Ao Nang'),
+    leg(ref, `2026-12-0${base + 1}`, 'Chiang Mai Airport', 'Melia Chiang Mai Hotel'),
+    leg(ref, `2026-12-0${base + 2}`, 'Melia Chiang Mai Hotel', 'Chiang Mai Airport'),
+    leg(ref, `2026-12-0${base + 3}`, 'Ao Nang', 'Krabi Airport'),
+  ];
+  if (t.includes('[L]')) return R(legs('SIM-L1', 1), false);
+  if (t.includes('[M]')) return R(legs('SIM-M1', 1).slice(0, 3), false);
+  if (t.includes('[N]')) return t.includes('ข้อ 2') ? R([legs('SIM-N1', 1)[1]], true) : R(legs('SIM-N1', 1), false);
+  if (t.includes('[O]')) return R(legs('SIM-O1', 1).slice(0, 2), true);
+  if (t.includes('[P]')) return R(legs('SIM-P1', 1).slice(0, 2), false);
+  if (t.includes('[A]')) return R([job({ booking_ref: 'SIM-A1' })]);
+  if (t.includes('[B]')) return R([job({ booking_ref: 'SIM-B1', date: '2026-11-19' })]);
+  if (t.includes('[C]')) return R([job({ booking_ref: 'SIM-C1', date: t.includes('ข้อมูลที่แชมป์เติมให้') ? '2026-11-20' : null })]);
+  if (t.includes('[D]')) return R([job({ booking_ref: 'SIM-D1', date: '2026-11-21', origin: 'Nowhere Hotel XYZ', destination: 'Unknown Beach Town' })]);
+  if (t.includes('[F]')) return R([job({ booking_ref: 'SIM-F1', date: '2026-10-01' })]);
+  if (t.includes('[G]')) return R([job({ booking_ref: 'SIM-G1', date: '2026-10-02' })]);
+  if (t.includes('[H]')) return R([job({ booking_ref: 'SIM-H1', date: '2026-10-03' })]);
+  if (t.includes('[E]')) return R([job({ booking_ref: 'SIM-E1', date: '2026-11-22' })]);
+  return R([]);
 };
 
 const step = (s: string) => console.log(`\n▶ ${s}`);
@@ -107,6 +123,9 @@ const since = (n: number) => sent.slice(n);
 // นับเฉพาะแถวที่สร้างในรอบนี้ (แถว SIM-* เก่าจากรอบที่ล้มอาจค้างในชีต สถานะยกเลิก — ต้องไม่ปนกัน)
 const RUN_START = new Date().toISOString();
 const rows = async () => (await listSideJobs()).filter((j) => j.booking_ref.startsWith('SIM-') && j.created_at >= RUN_START);
+
+// แถว SIM-* ที่ค้างจากรอบที่ล้มกลางคัน (ยังไม่ยกเลิก) จะชนระบบกันซ้ำ → ยกเลิกก่อนเริ่ม (ไม่แตะแถวที่ไม่ใช่ SIM-)
+for (const j of await listSideJobs()) if (j.booking_ref.startsWith('SIM-') && j.status !== 'cancelled') await cancelSideJob(j.job_id);
 
 try {
   step('S1 ส่งข้อความ "จากเพื่อน A: [A]" → บันทึก + การ์ด (เจ้าของ=เพื่อน A ราคา Agent 600)');
@@ -225,8 +244,8 @@ try {
   n = sent.length;
   const r11 = await sendSideJobConfirmations(NOW);
   const s11 = since(n);
-  assert.equal(r11.asked, 3, 'ต้องถาม 3 งาน (F,G,H): ' + JSON.stringify(r11));
-  const asks = s11.filter((x) => /ขับจริงไหม/.test(x.text));
+  assert.ok(r11.asked >= 3, 'ต้องถามอย่างน้อย 3 งาน (F,G,H + งานจริงที่ค้างในชีตถ้ามี): ' + JSON.stringify(r11));
+  const asks = s11.filter((x) => /ขับจริงไหม/.test(x.text) && /SIM-/.test(x.text));
   assert.equal(asks.length, 3);
   assert.ok(asks.every((x) => x.buttons?.flat().some((b) => b.callback_data.startsWith('sj_driven:')) && x.buttons?.flat().some((b) => b.callback_data.startsWith('sj_extra:'))));
   assert.ok(!s11.some((x) => /SIM-A1|SIM-B1|SIM-E1/.test(x.text)), 'งานเดือน พ.ย. (อนาคต) ต้องไม่ถูกถาม');
@@ -294,9 +313,82 @@ try {
 
   step('S17 ถามยืนยันรอบถัดไป: ถามเฉพาะที่ยังค้าง (G) ไม่ถามงานที่ตอบแล้ว');
   n = sent.length;
-  const r17 = await sendSideJobConfirmations(NOW);
-  assert.equal(r17.asked, 1);
-  assert.ok(since(n).some((x) => /SIM-G1/.test(x.text)));
+  await sendSideJobConfirmations(NOW);
+  const q17 = since(n).filter((x) => /ขับจริงไหม/.test(x.text) && /SIM-/.test(x.text));
+  assert.equal(q17.length, 1, 'ถามเฉพาะ SIM-G1 ที่ยังค้าง');
+  assert.ok(/SIM-G1/.test(q17[0].text));
+  console.log('   OK');
+
+  // ======================= เลือกข้อในใบจองหลายเที่ยว =======================
+  const legRows = async (ref: string) => (await rows()).filter((j) => j.booking_ref === ref);
+
+  step('S18 ใบจอง 4 ข้อ ไม่ได้ระบุข้อ → ไม่บันทึก ถามติ๊กเลือก (💰 กำกับข้อที่อยู่ในตาราง) → เลือก 1 กับ 4 → บันทึกเฉพาะ 2 ข้อ');
+  n = sent.length;
+  await routeSideJobMessage(msg({ text: `จาก${O1.display_name}: [L]` }), fake);
+  const askL = last();
+  assert.match(askL.text, /มี 4 ข้อ/); assert.match(askL.text, /ยังไม่ได้บันทึก/);
+  assert.equal((await legRows('SIM-L1')).length, 0, 'ต้องยังไม่บันทึกอะไรก่อนเลือก');
+  assert.match(askL.text, /💰 Krabi Airport → Ao Nang/); assert.ok(!/💰 Chiang Mai/.test(askL.text), 'เที่ยวเชียงใหม่ไม่อยู่ในตารางราคา ต้องไม่มี 💰');
+  const tokL = askL.buttons!.flat().find((b) => b.callback_data.startsWith('sj_legtog:'))!.callback_data.split(':')[1];
+  const tap = (data: string, mid = askL.mid) => handleSideJobCallback({ id: 'x' + Math.random(), data, message: { chat: { id: 999 }, message_id: mid } }, fake);
+  await tap(`sj_legok:${tokL}`); // ยังไม่ได้เลือก
+  assert.match(answers[answers.length - 1], /ยังไม่ได้เลือกข้อ/);
+  await tap(`sj_legtog:${tokL}:0`); await tap(`sj_legtog:${tokL}:3`); await tap(`sj_legtog:${tokL}:1`); await tap(`sj_legtog:${tokL}:1`); // 1 ถูกติ๊กแล้วยกเลิก
+  assert.ok(sent.some((x) => x.kind === 'edit' && x.mid === askL.mid && /☑️ <b>1\)/.test(x.text) && /☑️ <b>4\)/.test(x.text) && /☐ <b>2\)/.test(x.text)), 'ต้องแสดงติ๊กข้อ 1 กับ 4');
+  await tap(`sj_legok:${tokL}`);
+  const lr = await legRows('SIM-L1');
+  assert.equal(lr.length, 2, 'บันทึกเฉพาะ 2 ข้อที่เลือก');
+  assert.deepEqual(lr.map((j) => j.job_date).sort(), ['2026-12-01', '2026-12-04']);
+  assert.ok(lr.every((j) => j.owner_id === O1.owner_id), 'เจ้าของ = ชื่อที่พิมพ์นำหน้า');
+  assert.ok(lr.every((j) => j.agent_price === '600'));
+  console.log('   OK — บันทึก', lr.map((j) => j.job_date).join(', '));
+
+  step('S19 กดบันทึกซ้ำ (กดรัว) → ไม่บันทึกซ้ำ บอกว่าหมดอายุ/บันทึกไปแล้ว');
+  await tap(`sj_legok:${tokL}`);
+  assert.match(answers[answers.length - 1], /หมดอายุหรือบันทึกไปแล้ว/);
+  assert.equal((await legRows('SIM-L1')).length, 2);
+  console.log('   OK');
+
+  step('S20 ปุ่ม "ทุกข้อ" → บันทึกทุกข้อ');
+  await routeSideJobMessage(msg({ text: `จาก${O1.display_name}: [M]` }), fake);
+  const askM = last();
+  const tokM = askM.buttons!.flat().find((b) => b.callback_data.startsWith('sj_legall:'))!.callback_data.split(':')[1];
+  await tap(`sj_legall:${tokM}`, askM.mid);
+  assert.equal((await legRows('SIM-M1')).length, 3);
+  console.log('   OK');
+
+  step('S21 reply "ข้อ 2" ที่คำถามแทนการกดปุ่ม → อ่านใหม่ บันทึกเฉพาะข้อ 2');
+  await routeSideJobMessage(msg({ text: `จาก${O1.display_name}: [N]` }), fake);
+  const askN = last();
+  assert.match(askN.text, /มี 4 ข้อ/);
+  assert.equal((await legRows('SIM-N1')).length, 0);
+  await routeSideJobMessage(msg({ text: 'ข้อ 2', reply_to_message: { message_id: askN.mid } }), fake);
+  const nr = await legRows('SIM-N1');
+  assert.equal(nr.length, 1); assert.equal(nr[0].job_date, '2026-12-02');
+  console.log('   OK');
+
+  step('S22 แชมป์ระบุข้อไว้แล้วในข้อความ (AI คืนหลายเที่ยวแต่ selection_stated=true เช่น "ทุกข้อ") → บันทึกเลย ไม่ถามซ้ำ');
+  n = sent.length;
+  await routeSideJobMessage(msg({ text: `จาก${O1.display_name}: [O] ทุกข้อ` }), fake);
+  assert.equal((await legRows('SIM-O1')).length, 2);
+  assert.ok(!since(n).some((x) => /ขับข้อไหน/.test(x.text)));
+  console.log('   OK');
+
+  step('S23 หลายข้อ + ไม่รู้เจ้าของ → เลือกข้อก่อน แล้วเลือกเจ้าของ → บันทึกต่อโดยไม่ถามเลือกข้อซ้ำ ไม่เรียก AI อ่านซ้ำ');
+  const callsBefore23 = extractCalls.length;
+  await routeSideJobMessage(msg({ text: '[P] ใบจองหลายข้อ ไม่บอกชื่อเพื่อน' }), fake);
+  const askP = last();
+  assert.match(askP.text, /มี 2 ข้อ/);
+  const tokP = askP.buttons!.flat().find((b) => b.callback_data.startsWith('sj_legall:'))!.callback_data.split(':')[1];
+  await tap(`sj_legall:${tokP}`, askP.mid);
+  const askOwner = last();
+  assert.match(askOwner.text, /งานนี้ของใคร/);
+  const pick23 = askOwner.buttons!.flat().find((b) => b.text === O2.display_name)!;
+  await handleSideJobCallback({ id: 'y', data: pick23.callback_data, message: { chat: { id: 999 }, message_id: askOwner.mid } }, fake);
+  const pr = await legRows('SIM-P1');
+  assert.equal(pr.length, 2); assert.ok(pr.every((j) => j.owner_id === O2.owner_id));
+  assert.equal(extractCalls.length - callsBefore23, 1, 'AI อ่านครั้งเดียว (ไม่อ่านซ้ำตอนเลือกเจ้าของ)');
+  assert.ok(!sent.slice(-6).some((x) => /ขับข้อไหน/.test(x.text) && x.mid > askOwner.mid), 'ต้องไม่ถามเลือกข้อซ้ำ');
   console.log('   OK');
 
   console.log('\nSIM ALL OK');
