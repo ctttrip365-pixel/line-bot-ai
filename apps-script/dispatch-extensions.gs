@@ -31,11 +31,11 @@ function doPost(e) {
     case 'calendar_update_driver':
       return jsonResponse(calendarUpdateDriver(payload.eventId, payload.driverLine));
     case 'sheet_read':
-      return jsonResponse(sheetRead(payload.tab));
+      return jsonResponse(sheetRead(payload.tab, payload.book));
     case 'sheet_append':
-      return jsonResponse(sheetAppend(payload.tab, payload.row));
+      return jsonResponse(sheetAppend(payload.tab, payload.row, payload.book));
     case 'sheet_update':
-      return jsonResponse(sheetUpdateRow(payload.tab, payload.matchColumn, payload.matchValue, payload.patch));
+      return jsonResponse(sheetUpdateRow(payload.tab, payload.matchColumn, payload.matchValue, payload.patch, payload.book));
     case 'sheet_write_grid':
       return jsonResponse(sheetWriteGrid_(payload.tab, payload.values, payload.backgrounds));
     default:
@@ -96,9 +96,15 @@ function calendarUpdateDriver(eventId, driverLine) {
 
 // ---------- Sheets ("CTT - Driver Roster & Dispatch") ----------
 
-function getSheet_(tabName) {
-  const sheetId = PropertiesService.getScriptProperties().getProperty('DRIVER_SHEET_ID');
-  return SpreadsheetApp.openById(sheetId).getSheetByName(tabName);
+// book: ไม่ส่ง = ชีตจัดคนขับ (DRIVER_SHEET_ID) เหมือนเดิม | 'sidejobs' = สมุดบัญชีงานที่ขับให้เพื่อน (SIDEJOB_SHEET_ID)
+// ID ชีตเก็บใน Script Properties เท่านั้น ห้ามใส่ในโค้ด (repo line-bot-ai เป็น PUBLIC)
+function getSheet_(tabName, book) {
+  const key = book === 'sidejobs' ? 'SIDEJOB_SHEET_ID' : 'DRIVER_SHEET_ID';
+  const sheetId = PropertiesService.getScriptProperties().getProperty(key);
+  if (!sheetId) throw new Error('Script Property ' + key + ' ยังไม่ได้ตั้งค่า');
+  const sheet = SpreadsheetApp.openById(sheetId).getSheetByName(tabName);
+  if (!sheet) throw new Error('ไม่พบแท็บ ' + tabName);
+  return sheet;
 }
 
 /**
@@ -120,9 +126,9 @@ function formatCellValue_(v, headerName) {
   return Utilities.formatDate(v, 'Asia/Bangkok', isTimeOnly ? 'HH:mm' : 'yyyy-MM-dd');
 }
 
-function sheetRead(tabName) {
+function sheetRead(tabName, book) {
   try {
-    const sheet = getSheet_(tabName);
+    const sheet = getSheet_(tabName, book);
     const values = sheet.getDataRange().getValues();
     const headers = values[0];
     const rows = values.slice(1).map((row) => {
@@ -160,9 +166,9 @@ function sheetWriteGrid_(tabName, values, backgrounds) {
   }
 }
 
-function sheetAppend(tabName, row) {
+function sheetAppend(tabName, row, book) {
   try {
-    const sheet = getSheet_(tabName);
+    const sheet = getSheet_(tabName, book);
     const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
     const values = headers.map((h) => (row[h] !== undefined ? row[h] : ''));
     sheet.appendRow(values);
@@ -172,9 +178,9 @@ function sheetAppend(tabName, row) {
   }
 }
 
-function sheetUpdateRow(tabName, matchColumn, matchValue, patch) {
+function sheetUpdateRow(tabName, matchColumn, matchValue, patch, book) {
   try {
-    const sheet = getSheet_(tabName);
+    const sheet = getSheet_(tabName, book);
     const values = sheet.getDataRange().getValues();
     const headers = values[0];
     const matchColIdx = headers.indexOf(matchColumn);

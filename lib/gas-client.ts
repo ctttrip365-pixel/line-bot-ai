@@ -103,21 +103,25 @@ export function updateCalendarEventDriver(eventId: string, driverLine: string | 
 
 // ---- Sheet actions (new — "CTT - Driver Roster & Dispatch") ----
 
-export function sheetRead<T = Record<string, string>[]>(tab: string): Promise<GasResponse<T>> {
-  return callGas('sheet_read', { tab });
+/** book: ไม่ส่ง = ชีตจัดคนขับ | 'sidejobs' = สมุดบัญชีงานที่ขับให้เพื่อน (Script Property SIDEJOB_SHEET_ID) */
+export type SheetBook = 'sidejobs';
+
+export function sheetRead<T = Record<string, string>[]>(tab: string, book?: SheetBook): Promise<GasResponse<T>> {
+  return callGas('sheet_read', { tab, book });
 }
 
-export function sheetAppendRow(tab: string, row: Record<string, string>): Promise<GasResponse<void>> {
-  return callGas('sheet_append', { tab, row });
+export function sheetAppendRow(tab: string, row: Record<string, string>, book?: SheetBook): Promise<GasResponse<void>> {
+  return callGas('sheet_append', { tab, row, book });
 }
 
 export function sheetUpdateRow(
   tab: string,
   matchColumn: string,
   matchValue: string,
-  patch: Record<string, string>
+  patch: Record<string, string>,
+  book?: SheetBook
 ): Promise<GasResponse<void>> {
-  return callGas('sheet_update', { tab, matchColumn, matchValue, patch });
+  return callGas('sheet_update', { tab, matchColumn, matchValue, patch, book });
 }
 
 /**

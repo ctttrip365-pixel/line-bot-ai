@@ -60,6 +60,9 @@ interface PriceRow {
   to: string;
   price13: number;
   price48: number;
+  // ราคา Agent ดิบจากชีต (ก่อนบวก markup) — ใช้กับสมุดบัญชีงานที่ขับให้เพื่อน (lib/sidejobs.ts) ห้ามใช้บอกลูกค้า
+  agent13: number;
+  agent48: number;
   note: string;
   sedan?: number; // ราคารถเก๋งต่อคัน "ราคาขายลูกค้า" (จากคอลัมน์ price_sedan = ราคา Agent แล้วบวกเพิ่ม; ว่าง = ยังไม่มีราคา)
   suv?: number; // ราคา SUV ต่อคัน ราคาขายลูกค้า (คอลัมน์ price_suv)
@@ -78,7 +81,7 @@ interface PriceData {
 let cache: { data: PriceData; expiresAt: number } | null = null;
 
 export type PriceLookupResult =
-  | { status: 'ok'; from: string; to: string; pax: number; paxBand: '1-3' | '4-9'; price: number; note: string; paymentLink?: string }
+  | { status: 'ok'; from: string; to: string; pax: number; paxBand: '1-3' | '4-9'; price: number; agentPrice: number; note: string; paymentLink?: string }
   | { status: 'ambiguous'; place: string; options: string[]; message: string }
   | { status: 'handoff'; reason: string; message: string }
   | { status: 'not_found'; message: string };
@@ -176,7 +179,7 @@ function buildData(priceRows: string[][], aliasRows: string[][], learned: Array<
     const price13 = retailPrice(agent13);
     const price48 = retailPrice(agent48);
     const row: PriceRow = {
-      from, to, price13, price48, note: note ?? '',
+      from, to, price13, price48, agent13, agent48, note: note ?? '',
       // Payment Link ในชีตล็อกราคา Agent — ใช้ได้เฉพาะตอนไม่บวกราคา (ไม่งั้นลูกค้าจ่ายราคา Agent และยอดไม่ตรง pending)
       link13: MARKUP_ACTIVE ? '' : safePaymentLink(l13),
       link48: MARKUP_ACTIVE ? '' : safePaymentLink(l48),
@@ -326,6 +329,7 @@ export async function lookupPrice(origin: string, destination: string, pax: numb
         pax,
         paxBand: small ? '1-3' : '4-9',
         price: small ? row.price13 : row.price48,
+        agentPrice: small ? row.agent13 : row.agent48,
         note: row.note,
         paymentLink: (small ? row.link13 : row.link48) || undefined,
       };

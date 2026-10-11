@@ -4,7 +4,11 @@
 // Telegram webhooks are instead protected by an unguessable path segment / secret token
 // set at registration time (see apps-script/README or the setWebhook call in Phase 0).
 
+import { after } from 'next/server';
 import { answerCallbackQuery, sendTelegramMessage, TelegramUpdate } from '@/lib/telegram';
+import { routeSideJobMessage, handleSideJobCallback } from '@/lib/sidejob-intake';
+import { handleSummaryCommand } from '@/lib/sidejob-daily';
+import { getRedis } from '@/lib/history';
 import { rejectPlace, adoptConflictZone } from '@/lib/place-zones';
 import { zoneLabelTh } from '@/lib/prices';
 import { confirmAssignment, cancelAssignment, listAssignmentsStrict } from '@/lib/assignments';
@@ -17,6 +21,8 @@ import { monthsInRollingRange } from '@/lib/date-range';
 import { log } from '@/lib/log';
 
 export const runtime = 'nodejs';
+// งานรับ/อ่านรูปแบบ background (after) ต้องมีเวลาพอสำหรับ Gemini + เขียนชีตหลายงาน
+export const maxDuration = 60;
 
 // ไม่รู้ job_date ของ booking ที่ถูกยืนยัน/ปลดจาก callback data ตรงๆ (มีแค่ eventId) — ล้าง cache
 // ทุกเดือนที่ picker แสดงอยู่ตอนนี้ไปเลย ปลอดภัยกว่าและถูกกว่าการเสีย round-trip ไปหา job_date จริงก่อน
@@ -75,12 +81,14 @@ export async function POST(req: Request) {
 
   const update = (await req.json()) as TelegramUpdate;
 
-  // ข้อความที่แชมป์พิมพ์เอง: /job /jobs /งาน = ดูงานที่ลงคนขับแล้ว พร้อมปุ่มยกเลิกรายงาน (ตอบเฉพาะแชมป์เท่านั้น)
-  if (update.message?.text) {
+  // ข้อความ/รูป/ไฟล์ที่แชมป์ส่งมา (ตอบเฉพาะแชมป์เท่านั้น — แชทอื่นเพิกเฉย)
+  if (update.message) {
+    const msg = update.message;
     const champChat = process.env.TELEGRAM_CHAMP_CHAT_ID;
-    if (champChat && String(update.message.chat.id) === champChat) {
-      const text = update.message.text.trim();
-      if (/^\/?jobs?\b|^\/?งาน/i.test(text)) {
+    if (champChat && String(msg.chat.id) === champChat) {
+      const text = (msg.text ?? '').trim();
+      // คำสั่งต้องเป็นคำเดี่ยวๆ เท่านั้น (ไม่ใช่ข้อความที่ขึ้นต้นด้วยคำว่า "งาน..." เช่น "งานจากชื่อเพื่อน ...")
+      if (/^(?:\/(?:jobs?|งาน)|jobs?|งาน)\s*$/i.test(text)) {
         // ตอบรับทันที: Apps Script อาจใช้เวลาหลายสิบวินาทีตอนเริ่มทำงาน แชมป์จะได้รู้ว่าคำสั่งเข้าแล้ว
         await sendTelegramMessage('⏳ กำลังดึงรายการงาน... (ถ้า Apps Script ช้าอาจใช้เวลาครึ่งนาที)');
         try {
@@ -90,8 +98,31 @@ export async function POST(req: Request) {
           // ห้ามบอกว่า "ไม่มีงาน" เมื่อแค่อ่านข้อมูลไม่ได้
           await sendTelegramMessage('⚠️ ดึงรายการงานไม่ได้ (Apps Script ช้า/ไม่ตอบ) ลองพิมพ์ /jobs อีกครั้งในอีก 1 นาทีนะครับ');
         }
+      } else if (/^\/?(?:สรุป|summary)(?:\s+[\s\S]*)?$/i.test(text)) {
+        // /สรุป [เพื่อน] [เดือน] — อ่านชีตช้าได้ จึงทำเบื้องหลัง
+        const args = text.replace(/^\/?(?:สรุป|summary)\s*/i, '');
+        after(() => handleSummaryCommand(args));
+      } else if (text.startsWith('/')) {
+        await sendTelegramMessage(
+          [
+            'คำสั่งที่ใช้ได้:',
+            '/jobs (หรือ /job, /งาน) = ดูงานที่ลงคนขับแล้วภายใน 2 เดือน พร้อมปุ่มยกเลิกคนขับ',
+            '/สรุป [เพื่อน] [เดือน] = สรุปงานที่ขับให้เพื่อน พร้อมก๊อปส่ง เช่น /สรุป ชื่อเพื่อน ต.ค. (ไม่ใส่ = ทุกคน เดือนนี้)',
+            '',
+            'ส่งงานที่เพื่อนฝากขับ: ส่งใบจอง PDF / รูปแคปหน้าจอ / ข้อความ ได้เลย ขึ้นต้นชื่อเพื่อน เช่น "จากชื่อเพื่อน:" ระบบจะบันทึกลงสมุดบัญชีให้ทันที',
+          ].join('\n')
+        );
       } else {
-        await sendTelegramMessage('คำสั่งที่ใช้ได้: /jobs (หรือ /job, /งาน) = ดูงานที่ลงคนขับแล้วภายใน 2 เดือน พร้อมปุ่มยกเลิกคนขับ');
+        // Telegram อาจยิง update เดิมซ้ำถ้าตอบช้า → กันบันทึกซ้ำด้วย update_id (ตอบ 200 ทันที แล้วทำงานต่อเบื้องหลัง)
+        let duplicate = false;
+        if (update.update_id !== undefined) {
+          try {
+            duplicate = !(await getRedis().set(`sj:upd:${update.update_id}`, '1', { nx: true, ex: 3600 }));
+          } catch {
+            /* Redis ล่ม = ไม่กันซ้ำ (การกันซ้ำของงานในชีตยังทำงาน) */
+          }
+        }
+        if (!duplicate) after(() => routeSideJobMessage(msg));
       }
     }
     return new Response('ok', { status: 200 });
@@ -99,6 +130,18 @@ export async function POST(req: Request) {
 
   const cq = update.callback_query;
   if (!cq) return new Response('ok', { status: 200 });
+
+  // ปุ่มของสมุดบัญชีงานที่ขับให้เพื่อน (sj_*) — ทำเบื้องหลัง ตอบ Telegram ทันที
+  if (cq.data.startsWith('sj_')) {
+    after(async () => {
+      try {
+        await handleSideJobCallback(cq);
+      } catch (err) {
+        log.error('telegram_webhook.sj_callback_failed', { err: (err as Error).message });
+      }
+    });
+    return new Response('ok', { status: 200 });
+  }
 
   const [action, ...rest] = cq.data.split(':');
 

@@ -27,3 +27,17 @@
 6. **ตั้งริชเมนูแยกให้คนขับ** (ทางเลือก เฟส 1 ยังไม่จำเป็น — ตอนนี้คนขับพิมพ์ "วันว่าง"/"ขอลา" เป็นข้อความธรรมดาก็ใช้งานได้แล้ว) ทีหลังค่อยใช้ `linkRichMenuToUser` ผูกเมนูปุ่มให้คนขับแต่ละคนแยกจากลูกค้า
 
 ทำครบข้อ 1-5 แล้วบอกต้าวอ้นได้เลย จะช่วยทดสอบ end-to-end ต่อ (ดู "Verification" ในแผนงาน `~/.claude/plans/sequential-mixing-waterfall.md`)
+
+---
+
+## Side Jobs (สมุดบัญชีงานที่ขับให้เพื่อน) — เพิ่ม 2026-10-11
+
+ระบบบันทึกงานที่แชมป์ขับให้เพื่อน (รับผ่าน Telegram → ลงชีต → ถามยืนยันเช้าวันถัดไป → สรุปยอดเช้าวันที่ 1) ใช้ชีตแยกจากชีตจัดคนขับ
+
+1. **สร้าง Google Sheet ใหม่** ชื่อ `CTT - Side Jobs` มี 2 แท็บ (หัวตารางแถวแรกตามนี้เป๊ะๆ เพราะโค้ดอ่านตามชื่อคอลัมน์):
+   - `Side_Jobs`: job_id, owner_id, job_date, pickup_time, booking_ref, guest_name, pax, origin, destination, agent_price, extra_cost, extra_note, status, source_file_ids, raw_text, created_at, confirmed_at, telegram_card_msg_id
+   - `Owners`: owner_id, display_name, aliases (aliases คั่นด้วย `,` เป็นชื่อเล่นที่แชมป์พิมพ์นำหน้างาน เช่น "จากบอล:")
+   - ใส่เพื่อนที่ส่งงานให้ลงแท็บ `Owners` (ห้ามใส่รายชื่อในโค้ด — repo เป็น PUBLIC)
+2. **Apps Script**: วางโค้ดล่าสุดจาก `dispatch-extensions.gs` (`sheet_read/sheet_append/sheet_update` รับ field `book` เพิ่ม — ไม่ส่ง = ชีตจัดคนขับเหมือนเดิม) แล้ว **Deploy ทับ deployment เดิม**
+3. **Script Properties** (Project Settings) เพิ่ม `SIDEJOB_SHEET_ID` = ID ของชีต `CTT - Side Jobs`
+4. ทดสอบกับชีตทดสอบก่อนใช้ชีตจริง

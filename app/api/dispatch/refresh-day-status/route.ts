@@ -9,9 +9,12 @@ import { cacheDayStatusMap } from '@/lib/day-status';
 import { buildAndWriteMonthGrid } from '@/lib/driver-grid';
 import { alertUnassignedSoon } from '@/lib/unassigned-alert';
 import { alertNewPlaceZones } from '@/lib/place-zones';
+import { sendSideJobConfirmations, sendMonthlySummariesIfFirstDay } from '@/lib/sidejob-daily';
 import { log } from '@/lib/log';
 
 export const runtime = 'nodejs';
+// เพิ่มขั้นสมุดบัญชีงานที่ขับให้เพื่อน (อ่านชีต + ส่ง Telegram หลายข้อความ) — Apps Script เคย cold start 10-15 วิ
+export const maxDuration = 60;
 
 function currentAndNextMonth(): string[] {
   const now = new Date();
@@ -49,6 +52,22 @@ export async function GET(req: Request) {
     log.error('place_zones.digest_failed', { err: (err as Error).message });
   }
 
-  log.info('refresh_day_status.done', { months, alert, places });
-  return new Response(JSON.stringify({ ok: true, months, alert, places }), { status: 200 });
+  // ตัวเดียวกัน: ถามงานที่ขับให้เพื่อนซึ่งผ่านวันงานแล้ว "ขับจริงไหม/มีค่าใช้จ่ายเพิ่มไหม" (ปุ่มใน Telegram)
+  let sideJobs: { asked: number; remaining: number } | null = null;
+  try {
+    sideJobs = await sendSideJobConfirmations();
+  } catch (err) {
+    log.error('sidejob_confirm.failed', { err: (err as Error).message });
+  }
+
+  // ตัวเดียวกัน: เช้าวันที่ 1 (เวลาไทย) ส่งสรุปเดือนที่แล้วแยกรายเพื่อน พร้อมก๊อปส่ง
+  let sideSummary: { sent: boolean; month?: string } | null = null;
+  try {
+    sideSummary = await sendMonthlySummariesIfFirstDay();
+  } catch (err) {
+    log.error('sidejob_summary.failed', { err: (err as Error).message });
+  }
+
+  log.info('refresh_day_status.done', { months, alert, places, sideJobs, sideSummary });
+  return new Response(JSON.stringify({ ok: true, months, alert, places, sideJobs, sideSummary }), { status: 200 });
 }
