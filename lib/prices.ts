@@ -483,6 +483,20 @@ export function tourOfferText(lang: Lang): string {
     : `${TOUR_OFFER_MARK} Besides transfers, we also offer day tours — e.g. 4-Island, Phi Phi Island and Hong Island. Would you like the details and prices?`;
 }
 
+/**
+ * ลบข้อเสนอทัวร์ออกจากข้อความ (บรรทัดที่มี 🏝️) — ใช้ 2 จุด: (1) ข้อความเก่าในประวัติก่อนส่งให้ Gemini กันมันก๊อปข้อเสนอเดิมมาตอบซ้ำ
+ * (2) คำตอบใหม่เมื่อเคยเสนอทัวร์ไปแล้ว (เจอจริง 10 ต.ค. 2026: ลูกค้าขอสรุปใหม่ ข้อเสนอทัวร์โผล่ซ้ำ)
+ */
+export function stripTourOffer(text: string): string {
+  if (!text.includes(TOUR_OFFER_MARK)) return text;
+  return text
+    .split('\n')
+    .filter((l) => !l.includes(TOUR_OFFER_MARK))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 /** ดูจากข้อความที่บอทเคยส่งในบทสนทนานี้ (history 48 ชม.) ว่าเคยส่งตารางราคา / เสนอทัวร์ไปแล้วหรือยัง */
 export function offersAlreadyMade(history: Array<{ role: string; text: string }>): { menu: boolean; tour: boolean } {
   const modelTexts = history.filter((m) => m.role === 'model').map((m) => m.text);

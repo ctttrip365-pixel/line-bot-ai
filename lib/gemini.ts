@@ -3,7 +3,7 @@
 
 import { GoogleGenAI, Type, FunctionCallingConfigMode } from '@google/genai';
 import type { Content } from '@google/genai';
-import { lookupPrice, groupOptions, priceMenu, offersAlreadyMade, tourOfferText, zonesInText, zoneLabelTh } from './prices';
+import { lookupPrice, groupOptions, priceMenu, offersAlreadyMade, tourOfferText, stripTourOffer, zonesInText, zoneLabelTh } from './prices';
 import type { PriceLookupResult } from './prices';
 import { recordPlaceZone } from './place-zones';
 import { isAirportPickup } from './calendar';
@@ -122,6 +122,59 @@ export function toAirportOnly(text: string): boolean {
   return toAirport && !fromAirport;
 }
 
+/** จำนวนตัวอักษรไทยในข้อความ (ไม่นับ block [BOOKING_CONFIRMED] ซึ่งเป็นข้อมูลให้ระบบอ่าน) */
+export function thaiCharCount(text: string): number {
+  const visible = text.replace(/\[BOOKING_CONFIRMED\][\s\S]*?(\[\/BOOKING_CONFIRMED\]|$)/g, '');
+  return (visible.match(/[\u0E00-\u0E7F]/g) ?? []).length;
+}
+
+/**
+ * ลูกค้าไม่ได้พิมพ์ไทย แต่คำตอบมีไทยเยอะ (Gemini ก๊อปเทมเพลตสรุปจองภาษาไทยในพรอมต์ — เจอจริง 10 ต.ค. 2026 ลูกค้าอังกฤษได้สรุปไทย)
+ * → ให้ Gemini แปลทั้งข้อความเป็นภาษาของลูกค้า (ไม่ใช้ tool) โดยกัน block [BOOKING_CONFIRMED] / [HANDOFF] ไว้ไม่ให้ถูกแปล
+ * แปลไม่สำเร็จ/ผลไม่ครบ → คืนข้อความเดิม (ดีกว่าส่งข้อความพัง)
+ */
+export async function ensureReplyLanguage(reply: string, lang: 'thai' | 'english' | 'other', userMessage: string): Promise<string> {
+  if (lang === 'thai' || thaiCharCount(reply) < 6) return reply;
+  const keep: string[] = [];
+  const masked = reply.replace(/\[BOOKING_CONFIRMED\][\s\S]*?(\[\/BOOKING_CONFIRMED\]|$)|\[HANDOFF\]/g, (m) => {
+    keep.push(m);
+    return `<<KEEP${keep.length - 1}>>`;
+  });
+  const target = lang === 'english' ? 'English' : `the same language as this customer message: "${userMessage.slice(0, 200)}" (English if unsure)`;
+  try {
+    const res = await ai.models.generateContent({
+      model: MODEL,
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            {
+              text:
+                `Translate the customer-facing chat message below into ${target}.\n` +
+                'Rules: keep every emoji, number, time, date, price, URL, phone number and line break exactly as they are; keep tokens like <<KEEP0>> exactly as written; ' +
+                'keep proper names (Krabi, Ao Nang, Champ, CTT, Anda); translate "ยืนยัน/โอเค/ตกลง" as "Confirm/Okay/Agree" and "แก้ไข" as "Edit"; ' +
+                'output ONLY the translated message, no quotes, no explanation.\n\n' +
+                masked,
+            },
+          ],
+        },
+      ],
+      config: { temperature: 0, thinkingConfig: { thinkingBudget: 0 }, maxOutputTokens: 1024 },
+    });
+    let out = res.text?.trim() ?? '';
+    if (!out || thaiCharCount(out) >= 6 || keep.some((_, i) => !out.includes(`<<KEEP${i}>>`))) {
+      log.warn('reply.translate_unusable', { lang });
+      return reply;
+    }
+    keep.forEach((m, i) => { out = out.replace(`<<KEEP${i}>>`, m); });
+    log.info('reply.translated', { lang });
+    return out;
+  } catch (err) {
+    log.warn('reply.translate_failed', { lang, err: (err as Error).message });
+    return reply;
+  }
+}
+
 export const DEFAULT_REPLY_EN =
   'Sorry, let me check that for you — one moment please 🙏 Or you can contact Champ directly at +66 94 269 4651.';
 
@@ -221,7 +274,8 @@ export async function generateReply(
   const contents: Content[] = [
     ...history.map((msg) => ({
       role: msg.role as 'user' | 'model',
-      parts: [{ text: msg.text }],
+      // ตัดข้อเสนอทัวร์ออกจากข้อความเก่าก่อนให้ Gemini เห็น — ไม่งั้นมันก๊อปมาตอบซ้ำตอนสรุปจองใหม่ (ประวัติใน Redis ยังเก็บครบ เพื่อให้รู้ว่าเคยเสนอแล้ว)
+      parts: [{ text: msg.role === 'model' ? stripTourOffer(msg.text) || msg.text : msg.text }],
     })),
     { role: 'user' as const, parts: [{ text: userMessage }] },
   ];
@@ -438,6 +492,8 @@ export async function generateReply(
   let reply = guardLargeGroup(stripMarkdown(extractReply(raw) ?? ''), lang);
   if ((lastLookupOrigin && !isAirportPickup(lastLookupOrigin)) || (!lastLookupOrigin && toAirportOnly(userMessage))) reply = stripFlightAsk(reply);
   reply = stripGenericClosing(reply);
+  reply = await ensureReplyLanguage(reply, lang, userMessage);
+  if (already.tour) reply = stripTourOffer(reply) || reply; // เคยเสนอทัวร์แล้ว → ห้ามโผล่อีก ไม่ว่า Gemini เขียนเองหรือก๊อปมา (เหลือว่าง = ใช้ของเดิม)
   if (!reply) {
     log.warn('gemini.reply_unusable', { lang, startsWith: raw.slice(0, 20) });
     if (menuText) return `${lang === 'thai' ? 'ราคารถรับ-ส่งตามนี้ครับ' : 'Here are our transfer prices:'}\n\n${menuText}`;

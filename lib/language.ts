@@ -10,7 +10,9 @@ const OTHER_LETTER = /[֐-ۿऀ-ॿ぀-ヿ㐀-鿿가-힯Ѐ-ӿ]/; // ฮีบร
 
 type Lang = 'thai' | 'english' | 'other';
 
-function classify(text: string): Lang | null {
+function classify(raw: string): Lang | null {
+  // คำที่มีตัวเลขปน (เที่ยวบิน FD3305, รหัสจอง CTT-261010-ab12, เบอร์โทร) ไม่ใช่ตัวบอกภาษา — ลูกค้าไทยพิมพ์แค่ "FD3305" ต้องไม่ถูกมองเป็นอังกฤษ
+  const text = raw.replace(/\S*\d\S*/g, ' ');
   if (THAI.test(text)) return 'thai';
   if (OTHER_LETTER.test(text)) return 'other';
   if (LATIN.test(text)) return 'english';
