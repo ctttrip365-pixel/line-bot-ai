@@ -79,19 +79,46 @@ export async function proposeAssignment(row: {
  * เคส (2) ไม่รู้ job_date/job_start_time จาก callback_data (Telegram จำกัดความยาวข้อความปุ่ม ใส่ไปด้วยไม่ได้)
  * เลยต้องไปหาจาก Calendar event จริงแทน
  */
+/** ส่ง LINE บอกคนขับว่างานถูกยกเลิก/เปลี่ยนคน — คืน true ถ้าส่งสำเร็จ */
+async function notifyDriverJobCancelled(row: AssignmentRow, lineUserId: string | undefined, reason: string): Promise<boolean> {
+  if (!lineUserId) return false;
+  try {
+    await new Client({
+      channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN!,
+      channelSecret: process.env.LINE_CHANNEL_SECRET!,
+    }).pushMessage(lineUserId, {
+      type: 'text',
+      text: `❌ งานวันที่ ${row.job_date} เวลา ${row.job_start_time} น. ${reason} ไม่ต้องไปรับงานนี้ ขออภัยที่แจ้งผิดนะครับ 🙏`,
+    });
+    return true;
+  } catch (err) {
+    log.error('assignment.notify_driver_cancelled_failed', { bookingEventId: row.booking_event_id, err: (err as Error).message });
+    return false;
+  }
+}
+
+export interface ConfirmResult {
+  replacedDriverName?: string; // มีคนขับคนเดิมที่ถูกเปลี่ยนออก
+  replacedNotified: boolean; // แจ้งคนขับคนเดิมทาง LINE แล้วหรือไม่ (เฉพาะคนที่เคยได้รับแจ้งงาน)
+}
+
 export async function confirmAssignment(
   bookingEventId: string,
   driverId: string,
   driverDisplayName: string
-): Promise<void> {
+): Promise<ConfirmResult> {
   const existing = await listAssignments();
   const hasRow = existing.some((a) => a.booking_event_id === bookingEventId);
+  const prev = [...existing].reverse().find((a) => a.booking_event_id === bookingEventId);
+  const driverChanged = !!prev && prev.driver_id !== driverId && (prev.status === 'confirmed' || prev.status === 'notified');
 
   if (hasRow) {
     await sheetUpdateRow('Assignments_Log', 'booking_event_id', bookingEventId, {
       driver_id: driverId,
       status: 'confirmed',
       confirmed_at: new Date().toISOString(),
+      // เปลี่ยนคนขับ: เคลียร์เวลาแจ้งงานเดิม เพื่อให้คนขับคนใหม่ได้รับแจ้งงานตามรอบปกติ
+      ...(driverChanged ? { notified_at: '' } : {}),
     });
   } else {
     const today = new Date();
@@ -139,6 +166,17 @@ export async function confirmAssignment(
     );
   }
   log.info('assignment.confirmed', { bookingEventId, driverId, wasNew: !hasRow });
+
+  // เปลี่ยนคนขับ: ถ้าคนเดิมเคยได้รับแจ้งงานแล้ว ต้องบอกว่ายกเลิก (กันไปผิดงาน)
+  const result: ConfirmResult = { replacedNotified: false };
+  if (prev && driverChanged) {
+    const old = (await listDrivers()).find((d) => d.driver_id === prev.driver_id);
+    result.replacedDriverName = old?.display_name ?? prev.driver_id;
+    if (prev.notified_at) {
+      result.replacedNotified = await notifyDriverJobCancelled(prev, old?.line_user_id, 'เปลี่ยนคนขับแล้ว');
+    }
+  }
+  return result;
 }
 
 export async function markNotified(bookingEventId: string): Promise<void> {
@@ -227,21 +265,7 @@ export async function cancelAssignment(bookingEventId: string, mode: 'manual' | 
   const drivers = await listDrivers();
   const driver = drivers.find((d) => d.driver_id === row.driver_id);
 
-  let driverNotified = false;
-  if (row.notified_at && driver?.line_user_id) {
-    try {
-      await new Client({
-        channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN!,
-        channelSecret: process.env.LINE_CHANNEL_SECRET!,
-      }).pushMessage(driver.line_user_id, {
-        type: 'text',
-        text: `❌ งานวันที่ ${row.job_date} เวลา ${row.job_start_time} น. ถูกยกเลิกแล้วครับ ไม่ต้องไปรับงานนี้ ขออภัยที่แจ้งผิดนะครับ 🙏`,
-      });
-      driverNotified = true;
-    } catch (err) {
-      log.error('assignment.cancel_notify_driver_failed', { bookingEventId, err: (err as Error).message });
-    }
-  }
+  const driverNotified = row.notified_at ? await notifyDriverJobCancelled(row, driver?.line_user_id, 'ถูกยกเลิกแล้ว') : false;
 
   log.info('assignment.cancelled', { bookingEventId, mode, driverId: row.driver_id, driverNotified, calendarOk: calRes.ok });
   return {

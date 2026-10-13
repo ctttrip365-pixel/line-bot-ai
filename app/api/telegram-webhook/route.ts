@@ -8,6 +8,7 @@ import { after } from 'next/server';
 import { answerCallbackQuery, sendTelegramMessage, TelegramUpdate } from '@/lib/telegram';
 import { routeSideJobMessage, handleSideJobCallback } from '@/lib/sidejob-intake';
 import { handleSummaryCommand } from '@/lib/sidejob-daily';
+import { runChangeDriver, consumeWaitingDate, handleChangeDriverDay } from '@/lib/change-driver';
 import { getRedis } from '@/lib/history';
 import { rejectPlace, adoptConflictZone } from '@/lib/place-zones';
 import { zoneLabelTh } from '@/lib/prices';
@@ -88,7 +89,11 @@ export async function POST(req: Request) {
     if (champChat && String(msg.chat.id) === champChat) {
       const text = (msg.text ?? '').trim();
       // คำสั่งต้องเป็นคำเดี่ยวๆ เท่านั้น (ไม่ใช่ข้อความที่ขึ้นต้นด้วยคำว่า "งาน..." เช่น "งานจากชื่อเพื่อน ...")
-      if (/^(?:\/(?:jobs?|งาน)|jobs?|งาน)\s*$/i.test(text)) {
+      // เปลี่ยนคนขับ [วันที่] — ต้องตรวจก่อนระบบ Side Jobs (ไม่งั้นข้อความนี้ถูกอ่านเป็นใบจองของเพื่อน)
+      const changeDriver = text.match(/^\/?(?:เปลี่ยนคนขับ|เปลี่ยนคนขับรถ|เปลี่ยนคน|changedriver|driver)(?:\s+([\s\S]+))?$/i);
+      if (changeDriver) {
+        await runChangeDriver(changeDriver[1]);
+      } else if (/^(?:\/(?:jobs?|งาน)|jobs?|งาน)\s*$/i.test(text)) {
         // ตอบรับทันที: Apps Script อาจใช้เวลาหลายสิบวินาทีตอนเริ่มทำงาน แชมป์จะได้รู้ว่าคำสั่งเข้าแล้ว
         await sendTelegramMessage('⏳ กำลังดึงรายการงาน... (ถ้า Apps Script ช้าอาจใช้เวลาครึ่งนาที)');
         try {
@@ -98,6 +103,8 @@ export async function POST(req: Request) {
           // ห้ามบอกว่า "ไม่มีงาน" เมื่อแค่อ่านข้อมูลไม่ได้
           await sendTelegramMessage('⚠️ ดึงรายการงานไม่ได้ (Apps Script ช้า/ไม่ตอบ) ลองพิมพ์ /jobs อีกครั้งในอีก 1 นาทีนะครับ');
         }
+      } else if (text && (await consumeWaitingDate(text))) {
+        // แชมป์พิมพ์วันที่ตามหลังคำถาม "เปลี่ยนคนขับ — งานวันไหน" — จัดการแล้ว
       } else if (/^\/?(?:สรุป|summary)(?:\s+[\s\S]*)?$/i.test(text)) {
         // /สรุป [เพื่อน] [เดือน] — อ่านชีตช้าได้ จึงทำเบื้องหลัง
         const args = text.replace(/^\/?(?:สรุป|summary)\s*/i, '');
@@ -107,6 +114,7 @@ export async function POST(req: Request) {
           [
             'คำสั่งที่ใช้ได้:',
             '/jobs (หรือ /job, /งาน) = ดูงานที่ลงคนขับแล้วภายใน 2 เดือน พร้อมปุ่มยกเลิกคนขับ',
+            'เปลี่ยนคนขับ [วันที่] = ดึงงานทั้งหมดของวันนั้นให้เลือกงาน แล้วเลือกคนขับใหม่ เช่น "เปลี่ยนคนขับ 15/10" หรือพิมพ์แค่ "เปลี่ยนคนขับ" แล้วเลือกวัน',
             '/สรุป [เพื่อน] [เดือน] = สรุปงานที่ขับให้เพื่อน พร้อมก๊อปส่ง เช่น /สรุป ชื่อเพื่อน ต.ค. (ไม่ใส่ = ทุกคน เดือนนี้)',
             '',
             'ส่งงานที่เพื่อนฝากขับ: ส่งใบจอง PDF / รูปแคปหน้าจอ / ข้อความ ได้เลย ขึ้นต้นชื่อเพื่อน เช่น "จากชื่อเพื่อน:" ระบบจะบันทึกลงสมุดบัญชีให้ทันที',
@@ -146,17 +154,33 @@ export async function POST(req: Request) {
   const [action, ...rest] = cq.data.split(':');
 
   try {
-    if (action === 'confirm_assign') {
+    if (action === 'cd_day') {
+      await answerCallbackQuery(cq.id);
+      await handleChangeDriverDay(rest[0]);
+    } else if (action === 'confirm_assign') {
       const [bookingEventId, driverId, driverDisplayName] = rest;
-      await confirmAssignment(bookingEventId, driverId, driverDisplayName);
+      const changed = await confirmAssignment(bookingEventId, driverId, driverDisplayName);
       await invalidateJobsCacheForVisibleMonths(); // คนขับคนอื่นที่เปิด picker ต่อจากนี้ต้องเห็นว่างานนี้มีคนขับแล้วทันที
       await answerCallbackQuery(cq.id, 'ยืนยันแล้ว ✅');
-      await sendTelegramMessage(`✅ ยืนยันแล้ว: ${driverDisplayName} รับงาน ${bookingEventId}`, [
+      await sendTelegramMessage(
         [
-          { text: '🔄 เปลี่ยนคนขับ', callback_data: `reassign:${bookingEventId}` },
-          { text: '❌ ยกเลิกคนขับ', callback_data: `unassign_ask:${bookingEventId}` },
-        ],
-      ]);
+          `✅ ยืนยันแล้ว: ${driverDisplayName} รับงาน ${bookingEventId}`,
+          ...(changed.replacedDriverName
+            ? [
+                `🔄 เปลี่ยนจาก ${changed.replacedDriverName}`,
+                changed.replacedNotified
+                  ? `แจ้ง ${changed.replacedDriverName} ทาง LINE แล้วว่ายกเลิก`
+                  : `ยังไม่ได้แจ้ง ${changed.replacedDriverName} (ไม่เคยได้รับแจ้งงานนี้)`,
+              ]
+            : []),
+        ].join('\n'),
+        [
+          [
+            { text: '🔄 เปลี่ยนคนขับ', callback_data: `reassign:${bookingEventId}` },
+            { text: '❌ ยกเลิกคนขับ', callback_data: `unassign_ask:${bookingEventId}` },
+          ],
+        ]
+      );
     } else if (action === 'reassign') {
       const [bookingEventId] = rest;
       const drivers = await listDrivers();
