@@ -12,7 +12,7 @@
 // against duplicate Sheet rows / duplicate Telegram cards with short Redis locks.
 
 import { Redis } from '@upstash/redis';
-import { proposeAssignment, confirmAssignment } from './assignments';
+import { proposeAssignment, confirmAssignment, confirmStatusLines } from './assignments';
 import { sendTelegramMessage } from './telegram';
 import { log } from './log';
 
@@ -122,13 +122,14 @@ export async function processDispatchProposals(proposals: Proposal[]): Promise<v
     if (p.autoConfirm) {
       // fresh booking (ไม่เคยมีคนขับมาก่อนเลย) — ยืนยันอัตโนมัติทันทีตามที่แชมป์ตัดสินใจ (2026-09-23)
       // ไม่ต้องรอกดยืนยันใน Telegram แล้ว ยังคง Driver: ใน Calendar description ให้เหมือนเดิมทุกอย่าง
-      await confirmAssignment(p.bookingEventId, p.driverId, p.driverDisplayName);
+      const confirmed = await confirmAssignment(p.bookingEventId, p.driverId, p.driverDisplayName);
       await sendTelegramMessage(
         [
           '✅ <b>จับคู่คนขับอัตโนมัติแล้ว</b>',
           `งาน: ${p.summaryText}`,
           `วันที่: ${p.jobDate} ${p.jobStartTime}`,
           `คนขับ: ${p.driverDisplayName}`,
+          ...confirmStatusLines(confirmed, p.driverDisplayName),
         ].join('\n'),
         [
           [

@@ -12,7 +12,7 @@ import { runChangeDriver, consumeWaitingDate, handleChangeDriverDay } from '@/li
 import { getRedis } from '@/lib/history';
 import { rejectPlace, adoptConflictZone } from '@/lib/place-zones';
 import { zoneLabelTh } from '@/lib/prices';
-import { confirmAssignment, cancelAssignment, listAssignmentsStrict } from '@/lib/assignments';
+import { confirmAssignment, cancelAssignment, listAssignmentsStrict, confirmStatusLines } from '@/lib/assignments';
 import { listCalendarEvents } from '@/lib/gas-client';
 import { listDrivers } from '@/lib/drivers';
 import { getLeaveRequest, resolveLeaveRequest } from '@/lib/leave';
@@ -173,6 +173,7 @@ export async function POST(req: Request) {
                   : `ยังไม่ได้แจ้ง ${changed.replacedDriverName} (ไม่เคยได้รับแจ้งงานนี้)`,
               ]
             : []),
+          ...confirmStatusLines(changed, driverDisplayName),
         ].join('\n'),
         [
           [

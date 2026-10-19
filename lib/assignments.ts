@@ -100,6 +100,41 @@ async function notifyDriverJobCancelled(row: AssignmentRow, lineUserId: string |
 export interface ConfirmResult {
   replacedDriverName?: string; // มีคนขับคนเดิมที่ถูกเปลี่ยนออก
   replacedNotified: boolean; // แจ้งคนขับคนเดิมทาง LINE แล้วหรือไม่ (เฉพาะคนที่เคยได้รับแจ้งงาน)
+  calendarOk: boolean; // เขียนบรรทัด Driver: ลงปฏิทินสำเร็จหรือไม่ (ไว้บอกแชมป์ในข้อความยืนยัน)
+  // คนที่ถูกเปลี่ยนออกเพิ่งถูกยืนยันไว้ไม่นาน (ภายใน RECENT_CHANGE_MS) — เตือนแชมป์ว่าการยืนยันนี้สวนกับที่เพิ่งเปลี่ยน (19 ต.ค. 2026: ปฏิทินถูกเขียนกลับเป็นคนเดิมโดยไม่มีใครรู้)
+  recentChange?: { fromName: string; confirmedAtMs: number };
+}
+
+const RECENT_CHANGE_MS = 24 * 60 * 60 * 1000;
+
+/** "5 นาที" / "2 ชม. 8 นาที" */
+export function humanAgo(ms: number): string {
+  const min = Math.max(0, Math.round(ms / 60000));
+  if (min < 60) return `${min} นาที`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m ? `${h} ชม. ${m} นาที` : `${h} ชม.`;
+}
+
+/**
+ * บรรทัดสถานะที่ต่อท้ายข้อความยืนยันคนขับใน Telegram (ใช้ร่วมกับการกดยืนยันและการจับคู่อัตโนมัติ):
+ *  - สถานะการเขียนปฏิทิน
+ *  - เตือนถ้าการยืนยันนี้เปลี่ยนจากคนที่เพิ่งยืนยันไว้ภายใน 24 ชม. (กันของเก่า/ปุ่มเก่า/การแก้ซ้อนกันเขียนทับโดยไม่รู้ตัว)
+ */
+export function confirmStatusLines(r: ConfirmResult, newDriverName: string, nowMs: number = Date.now()): string[] {
+  const lines = [r.calendarOk ? '📆 ปฏิทิน: เขียนชื่อคนขับแล้ว ✅' : '📆 ปฏิทิน: เขียนชื่อคนขับไม่สำเร็จ ❌ — เติมบรรทัด Driver: เอง'];
+  if (r.recentChange) {
+    const at = new Date(r.recentChange.confirmedAtMs).toLocaleTimeString('en-GB', {
+      timeZone: 'Asia/Bangkok',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+    lines.push(
+      `⚠️ เพิ่งยืนยัน ${r.recentChange.fromName} เมื่อ ${humanAgo(nowMs - r.recentChange.confirmedAtMs)}ที่แล้ว (${at} น.) แต่ตอนนี้เปลี่ยนเป็น ${newDriverName} — ถ้าไม่ได้ตั้งใจ กด "🔄 เปลี่ยนคนขับ" เปลี่ยนกลับได้`
+    );
+  }
+  return lines;
 }
 
 export async function confirmAssignment(
@@ -154,6 +189,7 @@ export async function confirmAssignment(
     log.warn('assignment.calendar_driver_retry', { bookingEventId, error: calRes.error });
     calRes = await updateCalendarEventDriver(bookingEventId, driverLine);
   }
+  const calendarOk = calRes.ok;
   if (!calRes.ok) {
     log.error('assignment.calendar_driver_failed', { bookingEventId, error: calRes.error });
     await sendTelegramMessage(
@@ -168,10 +204,14 @@ export async function confirmAssignment(
   log.info('assignment.confirmed', { bookingEventId, driverId, wasNew: !hasRow });
 
   // เปลี่ยนคนขับ: ถ้าคนเดิมเคยได้รับแจ้งงานแล้ว ต้องบอกว่ายกเลิก (กันไปผิดงาน)
-  const result: ConfirmResult = { replacedNotified: false };
+  const result: ConfirmResult = { replacedNotified: false, calendarOk };
   if (prev && driverChanged) {
     const old = (await listDrivers()).find((d) => d.driver_id === prev.driver_id);
     result.replacedDriverName = old?.display_name ?? prev.driver_id;
+    const prevMs = prev.confirmed_at ? Date.parse(prev.confirmed_at) : NaN;
+    if (Number.isFinite(prevMs) && Date.now() - prevMs <= RECENT_CHANGE_MS) {
+      result.recentChange = { fromName: result.replacedDriverName, confirmedAtMs: prevMs };
+    }
     if (prev.notified_at) {
       result.replacedNotified = await notifyDriverJobCancelled(prev, old?.line_user_id, 'เปลี่ยนคนขับแล้ว');
     }
