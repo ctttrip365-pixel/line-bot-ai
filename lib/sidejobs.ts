@@ -6,7 +6,7 @@
 // ห้ามใส่เลขชีต/รายชื่อเพื่อน/เลขบัญชีในโค้ด (repo เป็น PUBLIC)
 
 import { sheetRead, sheetAppendRow, sheetUpdateRow } from './gas-client';
-import { lookupPrice } from './prices';
+import { lookupPrice, zonesInText } from './prices';
 import { norm } from './text-norm';
 import { log } from './log';
 
@@ -155,7 +155,20 @@ export async function lookupAgentPrice(origin: string, destination: string, pax:
   if (!pax || pax < 1) return { price: '', note: 'ยังไม่ทราบจำนวนคน (pax) จึงยังคิดราคาไม่ได้' };
   const lp = await lookupPrice(origin, destination, pax);
   if (lp.status === 'ok') return { price: String(lp.agentPrice) };
-  return { price: '', note: lp.message };
+  // lp.message เขียนเป็นคำสั่งให้ Gemini ของบอท LINE (เช่น "ห้ามพูดว่าระบบไม่รู้จัก…") — ห้ามเอามาโชว์แชมป์ในการ์ด (เจอจริง 18 ต.ค. 2026) เขียนเหตุผลเองแทน
+  const reply = 'reply ข้อความนี้เป็นตัวเลขราคา (บาท) ได้เลย';
+  if (lp.status === 'ambiguous') return { price: '', note: `"${lp.place}" ยังไม่ชัดว่าเป็นสนามบินหรือในเมือง/ย่านชายหาด — ${reply}` };
+  if (lp.status === 'handoff') return { price: '', note: lp.reason === 'pax_over_9' ? `เกิน 9 คน ต้องคิดราคาเอง — ${reply}` : `คิดราคาอัตโนมัติไม่ได้ — ${reply}` };
+  const unknown: string[] = [];
+  for (const place of [origin, destination]) {
+    if (place && (await zonesInText(place)).length === 0) unknown.push(place);
+  }
+  return {
+    price: '',
+    note: unknown.length > 0
+      ? `ยังไม่รู้ว่า ${unknown.map((p) => `"${p}"`).join(' และ ')} อยู่ย่านไหน (ไม่อยู่ในตารางราคา/แท็บ Aliases) — ${reply} หรือเติมชื่อนี้ในแท็บ Aliases ของชีตราคา`
+      : `ไม่มีราคาเส้นทางนี้ในตาราง — ${reply}`,
+  };
 }
 
 /** เตือนวันที่ผิดปกติ (มักเกิดจากอ่านปีผิด) — แสดงในการ์ดให้แชมป์เห็น */
