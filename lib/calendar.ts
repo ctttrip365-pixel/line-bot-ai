@@ -10,7 +10,8 @@ export interface BookingDetails {
   userId: string;
   amount?: string; // ราคา เป็นตัวเลข string เช่น "600"
   bookingRef?: string; // CTT-yymmdd-xxxx (Payment Link) — ใช้เป็นชื่อ/Booking No ของ event
-  guestName?: string; // ชื่อที่ลูกค้ากรอกตอนจ่ายเงิน
+  guestName?: string; // ชื่อผู้โดยสาร (บอทขอในแชทก่อนจ่ายเงินทุกครั้ง — ใช้เขียนป้ายรับ/เขียนใน Calendar)
+  lang?: 'thai' | 'english' | 'other'; // ภาษาของลูกค้า — ใช้เลือกภาษาข้อความยืนยันหลังจ่ายเงิน
   phone?: string; // เบอร์โทรติดต่อ (ขอในแชทก่อนจ่ายเงินทุกครั้ง)
   flight?: string; // หมายเลขเที่ยวบิน (ขอเมื่อรับจากสนามบิน) — Apps Script รับเป็นฟิลด์ flight
 }
@@ -29,8 +30,9 @@ export function involvesAirport(pickup: string, dropoff: string): boolean {
  * ข้อมูลที่ต้องมีก่อนออกลิงก์ชำระเงิน: เบอร์โทรลูกค้าทุกครั้ง (แชมป์สั่ง 8 ต.ค. 2026)
  * + หมายเลขเที่ยวบินเมื่อจุดรับ "หรือ" จุดส่งเป็นสนามบิน (แชมป์สั่ง 19 ต.ค. 2026 — เดิมขอเฉพาะรับจากสนามบิน; ขอเพิ่มตอนส่งสนามบินเพื่อตรวจสอบเวลาได้)
  */
-export function missingBookingInfo(b: BookingDetails): Array<'phone' | 'flight'> {
-  const missing: Array<'phone' | 'flight'> = [];
+export function missingBookingInfo(b: BookingDetails): Array<'name' | 'phone' | 'flight'> {
+  const missing: Array<'name' | 'phone' | 'flight'> = [];
+  if ((b.guestName ?? '').trim().length < 2) missing.push('name'); // ต้องมีชื่อก่อนจ่ายเงิน (แชมป์สั่ง 20 ต.ค. 2026) ไว้เขียนป้ายรับ
   if ((b.phone ?? '').replace(/\D/g, '').length < 8) missing.push('phone');
   if (involvesAirport(b.pickup, b.dropoff) && !(b.flight ?? '').trim()) missing.push('flight');
   return missing;
@@ -63,11 +65,12 @@ export function parseBookingConfirmation(
   const amount = get('amount');
   const phone = get('phone');
   const flight = get('flight');
+  const name = get('name');
 
   // Validate required fields
   if (!date || !time || !pickup || !dropoff) return null;
 
-  return { date, time, pickup, dropoff, pax: pax || '1', userId, amount: amount || '0', phone: phone || undefined, flight: flight || undefined };
+  return { date, time, pickup, dropoff, pax: pax || '1', userId, amount: amount || '0', phone: phone || undefined, flight: flight || undefined, guestName: name || undefined };
 }
 
 /**

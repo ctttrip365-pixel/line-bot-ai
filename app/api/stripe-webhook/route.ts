@@ -9,6 +9,7 @@ import { claimStripeSession, getPendingBooking, markBookingPaid } from '@/lib/bo
 import type { PendingBooking } from '@/lib/bookings';
 import { log } from '@/lib/log';
 import { sendTelegramMessage } from '@/lib/telegram';
+import { customerPaidText } from '@/lib/payment-messages';
 import { getRedis } from '@/lib/history';
 
 export const runtime = 'nodejs';
@@ -104,6 +105,8 @@ export async function POST(req: Request) {
       amount: meta.amount || '0',
       phone: meta.phone || undefined,
       flight: meta.flight || undefined,
+      guestName: meta.guestName || undefined,
+      lang: (meta.lang as 'thai' | 'english' | 'other' | undefined) || undefined,
     };
   }
 
@@ -180,7 +183,7 @@ export async function POST(req: Request) {
   const calendarOk = await createCalendarEvent({
     ...booking,
     bookingRef: pending?.ref,
-    guestName: session.customer_details?.name ?? undefined,
+    guestName: booking.guestName || session.customer_details?.name || undefined, // ชื่อที่ลูกค้าให้ในแชทมาก่อน (ไว้เขียนป้ายรับ)
     phone: booking.phone || session.customer_details?.phone || undefined,
   });
 
@@ -191,19 +194,7 @@ export async function POST(req: Request) {
     try {
       await getLineClient().pushMessage(booking.userId, {
         type: 'text',
-        text: [
-          '✅ รับเงินเรียบร้อยแล้วครับ!',
-          '',
-          `📅 ${booking.date} เวลา ${booking.time} น.`,
-          `📍 ${booking.pickup} → ${booking.dropoff}`,
-          `👥 ${booking.pax} คน`,
-          `💰 ${Number(booking.amount).toLocaleString()} บาท`,
-          ...(booking.flight ? [`✈️ เที่ยวบิน: ${booking.flight}`] : []),
-          ...(/สนามบินกระบี่|krabi\s*airport|KBV/i.test(booking.pickup) ? ['📍 จุดนัดรับ: ประตูทาง 15 สนามบินกระบี่'] : []),
-          '',
-          'พี่แชมป์จะรับท่านตรงเวลานะครับ 🚐',
-          'หากต้องการเปลี่ยนแปลง LINE มาได้เลยครับ',
-        ].join('\n'),
+        text: customerPaidText(booking, booking.lang ?? 'thai'),
       });
 
       customerNotified = true;
@@ -224,6 +215,7 @@ export async function POST(req: Request) {
     `📅 ${booking.date} เวลา ${booking.time} น.`,
     `📍 ${booking.pickup} → ${booking.dropoff}`,
     `👥 ${booking.pax} คน | ${Number(booking.amount).toLocaleString()} บาท`,
+    ...(booking.guestName ? [`👤 ชื่อ (เขียนป้ายรับ): ${booking.guestName}`] : ['⚠️ ไม่มีชื่อลูกค้า (จองก่อนระบบขอชื่อ) — ถามลูกค้าเพื่อเขียนป้าย']),
     ...(booking.phone ? [`📞 เบอร์ลูกค้า: ${booking.phone}`] : []),
     ...(booking.flight ? [`✈️ เที่ยวบิน: ${booking.flight}`] : []),
     ...(payer ? [`👤 ผู้จ่าย: ${payer}`] : []),

@@ -17,6 +17,8 @@ export interface StripeBookingParams {
   ref?: string; // CTT-yymmdd-xxxx — ผูกกับรายละเอียดจองใน Redis (ใช้เป็น client_reference_id)
   phone?: string;
   flight?: string;
+  guestName?: string;
+  lang?: string; // thai | english | other
 }
 
 /**
@@ -58,6 +60,8 @@ export async function createCheckoutSession(
       ...(params.ref ? { ref: params.ref } : {}),
       ...(params.phone ? { phone: params.phone } : {}),
       ...(params.flight ? { flight: params.flight } : {}),
+      ...(params.guestName ? { guestName: params.guestName } : {}),
+      ...(params.lang ? { lang: params.lang } : {}),
     },
     expires_at: Math.floor(Date.now() / 1000) + 3600, // หมดอายุ 1 ชั่วโมง
   });

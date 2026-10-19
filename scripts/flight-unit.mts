@@ -3,8 +3,8 @@
 import assert from 'node:assert/strict';
 import { involvesAirport, missingBookingInfo } from '../lib/calendar';
 
-const b = (pickup: string, dropoff: string, phone = '0812345678', flight?: string) =>
-  ({ date: '23/10/2026', time: '10:00', pickup, dropoff, pax: '2', userId: 'U1', amount: '700', phone, flight });
+const b = (pickup: string, dropoff: string, phone = '0812345678', flight?: string, guestName: string | null = 'Somchai Jaidee') =>
+  ({ date: '23/10/2026', time: '10:00', pickup, dropoff, pax: '2', userId: 'U1', amount: '700', phone, flight, guestName: guestName ?? undefined });
 
 // รับจากสนามบิน (เดิม) ยังต้องมีเที่ยวบิน
 assert.deepEqual(missingBookingInfo(b('สนามบินกระบี่', 'อ่าวนาง')), ['flight']);
@@ -18,5 +18,11 @@ assert.deepEqual(missingBookingInfo(b('Avani Krabi', 'Ao Nang Beach')), []);
 assert.deepEqual(missingBookingInfo(b('Avani Krabi', 'Ao Nang Beach', '')), ['phone']);
 assert.deepEqual(missingBookingInfo(b('Avani Krabi', 'สนามบินกระบี่', '123')), ['phone', 'flight']);
 assert.ok(involvesAirport('hotel', 'KBV') && involvesAirport('HKT', 'hotel') && !involvesAirport('hotel A', 'hotel B'));
+
+// ชื่อผู้โดยสารบังคับทุกครั้ง (แชมป์สั่ง 20 ต.ค. 2026 — ไว้เขียนป้ายรับ)
+assert.deepEqual(missingBookingInfo(b('Avani Krabi', 'Ao Nang Beach', '0812345678', undefined, null)), ['name']);
+assert.deepEqual(missingBookingInfo(b('Avani Krabi', 'Ao Nang Beach', '0812345678', undefined, ' ')), ['name']);
+assert.deepEqual(missingBookingInfo(b('Avani Krabi', 'Ao Nang Beach', '0812345678', undefined, 'A')), ['name']);
+assert.deepEqual(missingBookingInfo(b('สนามบินกระบี่', 'อ่าวนาง', '', undefined, null)), ['name', 'phone', 'flight']);
 
 console.log('ALL OK');

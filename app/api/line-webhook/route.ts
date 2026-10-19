@@ -177,7 +177,8 @@ export async function POST(req: Request) {
         if (booking && missingInfo.length > 0) {
           log.warn('booking.missing_contact_info', { userId, missing: missingInfo });
           const th = detectLanguage(userMessage) === 'thai';
-          const names = missingInfo.map((m) => (m === 'phone' ? (th ? 'เบอร์โทรติดต่อ' : 'contact phone number') : th ? 'หมายเลขเที่ยวบิน' : 'flight number'));
+          const label = { name: th ? 'ชื่อ-นามสกุลผู้โดยสาร (ไว้เขียนป้ายรับ)' : 'passenger full name (for the pickup name board)', phone: th ? 'เบอร์โทรติดต่อ' : 'contact phone number', flight: th ? 'หมายเลขเที่ยวบิน' : 'flight number' } as const;
+          const names = missingInfo.map((m) => label[m]);
           finalReply = finalReply
             .split('\n')
             .filter((l) => !/ลิงก์|payment link/i.test(l))
@@ -191,6 +192,7 @@ export async function POST(req: Request) {
         }
 
         if (booking && missingInfo.length === 0) {
+          booking.lang = detectLanguage(userMessage, history); // เก็บภาษาลูกค้าไว้เลือกภาษาข้อความยืนยันหลังจ่ายเงิน
           log.info('booking.confirmed', {
             userId, date: booking.date, time: booking.time,
             pickup: booking.pickup, dropoff: booking.dropoff,
@@ -239,6 +241,7 @@ export async function POST(req: Request) {
                   pickup: booking.pickup, dropoff: booking.dropoff,
                   pax: booking.pax, lineUserId: userId,
                   ref, phone: booking.phone, flight: booking.flight,
+                  guestName: booking.guestName, lang: booking.lang,
                 });
                 footer = '⏱ ลิงก์หมดอายุใน 1 ชั่วโมง';
                 log.info('stripe.link_created', { userId, amount });
