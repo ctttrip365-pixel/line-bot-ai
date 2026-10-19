@@ -106,6 +106,21 @@ export function stripGenericClosing(text: string): string {
   return out.replace(/\[HANDOFF\]/g, '').trim().length >= 15 ? out : text;
 }
 
+/**
+ * ข้อความเก่าในประวัติที่บอกลูกค้าว่า "ระบบชำระเงิน/สร้างลิงก์มีปัญหา" — ห้ามให้ Gemini เห็นเป็นข้อเท็จจริงปัจจุบัน
+ * เจอจริง 20 ต.ค. 2026: แก้คีย์ Stripe แล้ว แต่ลูกค้าในแชทเดิมยังได้คำตอบ "ระบบเสีย" เพราะ Gemini เชื่อประวัติเก่า
+ * และไม่พิมพ์ [BOOKING_CONFIRMED] จึงไม่มีการเรียก Stripe (ข้อความล้มจริงสร้างโดยโค้ดที่ route และแจ้งแชมป์เองอยู่แล้ว)
+ */
+const PAYMENT_FAILURE_NOTE =
+  /ขัดข้อง|ระบบ[^\n]{0,20}(มีปัญหา|ใช้งานไม่ได้)|ไม่สามารถสร้างลิงก์|temporarily unavailable|payment (system|link)[^\n]{0,60}(problem|issue|unavailable|not (working|available))|unable to (create|generate)[^\n]{0,20}payment link/i;
+
+export function isPaymentFailureNote(text: string): boolean {
+  return PAYMENT_FAILURE_NOTE.test(text);
+}
+
+export const PAYMENT_NOTE_PLACEHOLDER =
+  '(ข้อความเก่า: เคยแจ้งลูกค้าว่าสร้างลิงก์ชำระเงินไม่ได้ในครั้งนั้น — ปัญหานั้นผ่านไปแล้ว ให้ลองสร้างลิงก์ใหม่ทุกครั้งที่ลูกค้าขอหรือยืนยันอีกครั้ง)';
+
 /** จำนวนตัวอักษรไทยในข้อความ (ไม่นับ block [BOOKING_CONFIRMED] ซึ่งเป็นข้อมูลให้ระบบอ่าน) */
 export function thaiCharCount(text: string): number {
   const visible = text.replace(/\[BOOKING_CONFIRMED\][\s\S]*?(\[\/BOOKING_CONFIRMED\]|$)/g, '');
@@ -259,7 +274,7 @@ export async function generateReply(
     ...history.map((msg) => ({
       role: msg.role as 'user' | 'model',
       // ตัดข้อเสนอทัวร์ออกจากข้อความเก่าก่อนให้ Gemini เห็น — ไม่งั้นมันก๊อปมาตอบซ้ำตอนสรุปจองใหม่ (ประวัติใน Redis ยังเก็บครบ เพื่อให้รู้ว่าเคยเสนอแล้ว)
-      parts: [{ text: msg.role === 'model' ? stripTourOffer(msg.text) || msg.text : msg.text }],
+      parts: [{ text: msg.role === 'model' ? (isPaymentFailureNote(msg.text) ? PAYMENT_NOTE_PLACEHOLDER : stripTourOffer(msg.text) || msg.text) : msg.text }],
     })),
     { role: 'user' as const, parts: [{ text: userMessage }] },
   ];
