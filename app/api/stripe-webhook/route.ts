@@ -8,6 +8,8 @@ import type { BookingDetails } from '@/lib/calendar';
 import { claimStripeSession, getPendingBooking, markBookingPaid } from '@/lib/bookings';
 import type { PendingBooking } from '@/lib/bookings';
 import { log } from '@/lib/log';
+import { sendTelegramMessage } from '@/lib/telegram';
+import { getRedis } from '@/lib/history';
 
 export const runtime = 'nodejs';
 
@@ -21,6 +23,20 @@ function getLineClient() {
     channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN!,
     channelSecret: process.env.LINE_CHANNEL_SECRET!,
   });
+}
+
+const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/**
+ * แจ้งแชมป์ทาง Telegram (บอท CTT Krabi Alert) — ไม่ throw และไม่กระทบการตอบ Stripe
+ * (แชมป์สั่ง 19 ต.ค. 2026: เดิมแจ้งแค่กลุ่มแอดมิน LINE ซึ่งยังไม่ได้ตั้ง ADMIN_GROUP_ID จึงไม่มีใครรู้ว่ามีเงินเข้า)
+ */
+async function alertChamp(title: string, lines: string[]): Promise<void> {
+  try {
+    await sendTelegramMessage([`<b>${esc(title)}</b>`, '', ...lines.map(esc)].join('\n'));
+  } catch (err) {
+    log.error('stripe.telegram_alert_failed', { err: (err as Error).message });
+  }
 }
 
 export async function POST(req: Request) {
@@ -38,6 +54,18 @@ export async function POST(req: Request) {
     );
   } catch (err) {
     log.warn('stripe.invalid_signature', { err: (err as Error).message });
+    // มี header stripe-signature แต่ตรวจไม่ผ่าน = STRIPE_WEBHOOK_SECRET อาจไม่ตรงกับ Stripe → ทุกการจ่ายจะเงียบ จึงเตือนแชมป์ (จำกัด 1 ครั้ง/ชม. กัน spam)
+    if (sig) {
+      try {
+        const first = await getRedis().set('alert:stripe_invalid_sig', '1', { nx: true, ex: 3600 });
+        if (first) {
+          await alertChamp('⚠️ Stripe ส่ง webhook มาแต่ตรวจลายเซ็นไม่ผ่าน', [
+            'STRIPE_WEBHOOK_SECRET ใน Vercel (โปรเจกต์ i5k3) อาจไม่ตรงกับ Signing secret ของ webhook ใน Stripe',
+            'ถ้ามีคนจ่ายเงินช่วงนี้ ระบบจะไม่ลงงานและไม่แจ้งลูกค้า — ตรวจที่ Stripe → Webhooks → CTT Stripe Webhook → Event deliveries',
+          ]);
+        }
+      } catch { /* non-critical */ }
+    }
     return new Response('invalid signature', { status: 400 });
   }
 
@@ -85,6 +113,13 @@ export async function POST(req: Request) {
   if (!booking) {
     // เงินเข้าแล้วแต่ไม่รู้ว่าจองอะไร — ห้ามเงียบ แจ้งแชมป์ให้ตามเอง
     log.warn('stripe.booking_not_found', { sessionId: session.id, ref: session.client_reference_id });
+    await alertChamp('⚠️ มีเงินเข้า Stripe แต่หารายละเอียดการจองไม่เจอ', [
+      `ยอด: ${((session.amount_total ?? 0) / 100).toLocaleString()} บาท`,
+      `ผู้จ่าย: ${payer || 'ไม่ระบุ'}`,
+      `รหัสอ้างอิง: ${session.client_reference_id ?? '-'}`,
+      `Stripe session: ${session.id}`,
+      'ต้องตามลูกค้าและลงงานเอง',
+    ]);
     if (adminGroupId) {
       try {
         await getLineClient().pushMessage(adminGroupId, {
@@ -111,6 +146,12 @@ export async function POST(req: Request) {
   // จ่ายซ้ำด้วยลิงก์/รหัสอ้างอิงเดิม (ไม่ลงงานซ้ำ แต่ต้องให้แชมป์รู้ว่ามีเงินเข้าอีกก้อน)
   if (pending?.paidSessionId && pending.paidSessionId !== session.id) {
     log.warn('stripe.double_payment', { ref: pending.ref, sessionId: session.id });
+    await alertChamp('⚠️ มีการจ่ายซ้ำสำหรับการจองเดิม', [
+      `รหัส: ${pending.ref}`,
+      `ยอด: ${((session.amount_total ?? 0) / 100).toLocaleString()} บาท`,
+      `ผู้จ่าย: ${payer || 'ไม่ระบุ'}`,
+      'ยังไม่ได้ลงงานซ้ำ ตรวจสอบเพื่อคืนเงินถ้าจำเป็น',
+    ]);
     if (adminGroupId) {
       try {
         await getLineClient().pushMessage(adminGroupId, {
@@ -144,7 +185,9 @@ export async function POST(req: Request) {
   });
 
   // 5. ส่ง LINE push message แจ้งลูกค้าว่าจ่ายแล้ว + จองสมบูรณ์
+  let customerNotified: boolean | null = null; // null = ไม่มี LINE userId ให้แจ้ง
   if (booking.userId && booking.userId !== 'unknown') {
+    customerNotified = false;
     try {
       await getLineClient().pushMessage(booking.userId, {
         type: 'text',
@@ -163,6 +206,7 @@ export async function POST(req: Request) {
         ].join('\n'),
       });
 
+      customerNotified = true;
       log.info('stripe.line_notified', { userId: booking.userId });
     } catch (err) {
       log.error('stripe.line_notify_failed', {
@@ -176,6 +220,20 @@ export async function POST(req: Request) {
   if (pending) await markBookingPaid(pending, session.id);
   const amountMismatch =
     pending && session.amount_total != null && session.amount_total !== Number(pending.amount) * 100;
+  await alertChamp('💰 มีการจองและชำระเงินใหม่!', [
+    `📅 ${booking.date} เวลา ${booking.time} น.`,
+    `📍 ${booking.pickup} → ${booking.dropoff}`,
+    `👥 ${booking.pax} คน | ${Number(booking.amount).toLocaleString()} บาท`,
+    ...(booking.phone ? [`📞 เบอร์ลูกค้า: ${booking.phone}`] : []),
+    ...(booking.flight ? [`✈️ เที่ยวบิน: ${booking.flight}`] : []),
+    ...(payer ? [`👤 ผู้จ่าย: ${payer}`] : []),
+    ...(pending ? [`🔖 รหัส: ${pending.ref}`] : []),
+    ...(amountMismatch
+      ? [`⚠️ ยอดที่ Stripe รับ (${((session.amount_total ?? 0) / 100).toLocaleString()}) ไม่ตรงกับราคาในระบบ ตรวจสอบด้วย`]
+      : []),
+    `📆 Calendar: ${calendarOk ? 'สร้างแล้ว ✅' : 'ล้มเหลว ❌ — ลงปฏิทินเอง'}`,
+    ...(customerNotified === true ? ['📨 แจ้งลูกค้าใน LINE แล้ว ✅'] : customerNotified === false ? ['📨 แจ้งลูกค้าใน LINE ไม่สำเร็จ ❌ — ทักลูกค้าเอง'] : []),
+  ]);
   if (adminGroupId) {
     try {
       await getLineClient().pushMessage(adminGroupId, {
