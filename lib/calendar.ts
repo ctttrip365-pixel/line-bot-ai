@@ -20,11 +20,19 @@ export function isAirportPickup(pickup: string): boolean {
   return /สนามบิน|airport|\b(KBV|HKT|DMK|BKK)\b/i.test(pickup);
 }
 
-/** ข้อมูลที่ต้องมีก่อนออกลิงก์ชำระเงิน (แชมป์สั่ง 8 ต.ค. 2026): เบอร์โทรลูกค้าทุกครั้ง + หมายเลขเที่ยวบินเมื่อรับจากสนามบิน */
+/** เที่ยวนี้เกี่ยวกับสนามบินไหม — จุดรับหรือจุดส่งเป็นสนามบิน (รับ = เที่ยวบินขาเข้า, ส่ง = เที่ยวบินขาออก) */
+export function involvesAirport(pickup: string, dropoff: string): boolean {
+  return isAirportPickup(pickup) || isAirportPickup(dropoff);
+}
+
+/**
+ * ข้อมูลที่ต้องมีก่อนออกลิงก์ชำระเงิน: เบอร์โทรลูกค้าทุกครั้ง (แชมป์สั่ง 8 ต.ค. 2026)
+ * + หมายเลขเที่ยวบินเมื่อจุดรับ "หรือ" จุดส่งเป็นสนามบิน (แชมป์สั่ง 19 ต.ค. 2026 — เดิมขอเฉพาะรับจากสนามบิน; ขอเพิ่มตอนส่งสนามบินเพื่อตรวจสอบเวลาได้)
+ */
 export function missingBookingInfo(b: BookingDetails): Array<'phone' | 'flight'> {
   const missing: Array<'phone' | 'flight'> = [];
   if ((b.phone ?? '').replace(/\D/g, '').length < 8) missing.push('phone');
-  if (isAirportPickup(b.pickup) && !(b.flight ?? '').trim()) missing.push('flight');
+  if (involvesAirport(b.pickup, b.dropoff) && !(b.flight ?? '').trim()) missing.push('flight');
   return missing;
 }
 

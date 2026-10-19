@@ -17,6 +17,8 @@ import { wantsCarPhotos, carPhotoMessages } from '@/lib/car-photos';
 import { findDriverByLineId, driverRosterUnavailable } from '@/lib/drivers';
 import { handleDriverMessage, handleDriverPostback } from '@/lib/driver-flow';
 import { log } from '@/lib/log';
+import { linkFailureCustomerText, linkFailureAdminText } from '@/lib/bank';
+import { sendTelegramMessage } from '@/lib/telegram';
 
 export const runtime = 'nodejs';
 // bumped from 30s — the avail:submit handler's after() now runs runDispatchMatch() over a much
@@ -195,6 +197,8 @@ export async function POST(req: Request) {
             pax: booking.pax, amount: booking.amount,
           });
 
+          let failAmount: number | undefined; // ยอดที่ลูกค้าต้องจ่าย (ใช้ในข้อความตอนลิงก์ล้ม)
+          let failRef: string | undefined;
           try {
             // ราคาให้เซิร์ฟเวอร์ค้นเองจากชีต ไม่เชื่อตัวเลขที่ Gemini เขียนมาในบล็อก (เดิมไม่มีราคา = เก็บ 600)
             const priced = await lookupPrice(booking.pickup, booking.dropoff, Number(booking.pax));
@@ -208,12 +212,14 @@ export async function POST(req: Request) {
               finalReply = [finalReply, '', 'ขอให้พี่แชมป์ยืนยันราคาให้ก่อนนะครับ แล้วจะส่งลิงก์ชำระเงินให้เลยครับ 🙏'].join('\n');
             } else {
               const amount = priced.price;
+              failAmount = amount;
               let paymentUrl: string;
               let footer: string;
               if (priced.paymentLink) {
                 // Stripe Payment Link ประจำเส้นทาง (ราคาถูกล็อกไว้ที่ลิงก์) — เก็บรายละเอียดจองไว้ฝั่งเรา
                 // แล้วให้ webhook ค้นกลับด้วย client_reference_id
                 const ref = newBookingRef();
+                failRef = ref;
                 await savePendingBooking({ ...booking, amount: String(amount), ref });
                 paymentUrl = `${priced.paymentLink}?client_reference_id=${ref}`;
                 footer = '📝 กรอกชื่อและเบอร์โทรในหน้าชำระเงินด้วยนะครับ';
@@ -222,6 +228,7 @@ export async function POST(req: Request) {
                 // ลิงก์ที่สร้างเอง: เก็บรายละเอียดจอง (เบอร์/เที่ยวบิน/รหัสอ้างอิง) ไว้ใน Redis ด้วย แล้วผูกกับ Stripe ผ่าน client_reference_id
                 // Redis ล่ม → ยังสร้างลิงก์ได้ (ข้อมูลทั้งหมดอยู่ใน metadata ของ session)
                 const ref = newBookingRef();
+                failRef = ref;
                 try {
                   await savePendingBooking({ ...booking, amount: String(amount), ref });
                 } catch (err) {
@@ -246,12 +253,20 @@ export async function POST(req: Request) {
             }
           } catch (err) {
             log.error('stripe.link_failed', { err: (err as Error).message, userId });
-            finalReply = [
-              finalReply, '',
-              '⚠️ ระบบชำระเงินออนไลน์มีปัญหาชั่วคราวครับ',
-              'กรุณาโอนเงินและส่ง slip มาที่ LINE นี้',
-              'หรือโทร +66 94 269 4651 ครับ',
-            ].join('\n');
+            // ข้อความลูกค้า = ภาษาของลูกค้า + ข้อมูลโอนจาก env + ขอสลิป (ตัดประโยค "กำลังสร้างลิงก์…" ที่ Gemini เขียนไว้ก่อนหน้าออก ไม่ให้ขัดกัน)
+            const failLang = detectLanguage(userMessage, history);
+            const kept = finalReply
+              .split('\n')
+              .filter((l) => !/ลิงก์|payment link|generating/i.test(l))
+              .join('\n')
+              .trim();
+            finalReply = [kept, kept ? '' : null, linkFailureCustomerText(failLang, failAmount)].filter((x) => x !== null).join('\n');
+            // แจ้งแชมป์ทาง Telegram ทันที — ลูกค้ากำลังรอ (เดิมไม่มีใครรู้ว่าลิงก์ล้ม)
+            try {
+              await sendTelegramMessage(
+                linkFailureAdminText({ lang: failLang, amount: failAmount, err: (err as Error).message, booking, ref: failRef, userId })
+              );
+            } catch { /* non-critical: sendTelegramMessage ไม่ throw อยู่แล้ว */ }
           }
         }
 
