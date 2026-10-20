@@ -19,6 +19,7 @@ import { handleDriverMessage, handleDriverPostback } from '@/lib/driver-flow';
 import { log } from '@/lib/log';
 import { linkFailureCustomerText, linkFailureAdminText } from '@/lib/bank';
 import { sendTelegramMessage } from '@/lib/telegram';
+import { isBotPaused } from '@/lib/pause';
 
 export const runtime = 'nodejs';
 // bumped from 30s — the avail:submit handler's after() now runs runDispatchMatch() over a much
@@ -63,6 +64,11 @@ export async function POST(req: Request) {
       // คนขับ (ที่อยู่ในชีต) ส่งรูปมาไม่เกี่ยวกับลูกค้า ข้ามไป
       if (event.type === 'message' && event.message.type === 'image') {
         if (await findDriverByLineId(userId)) return;
+        // แชมป์กดพักบอทลูกค้าคนนี้อยู่ (กำลังตอบเอง) → ไม่ตอบ/ไม่แจ้งซ้ำ รูปนี้แชมป์เห็นในแชทอยู่แล้ว
+        if (await isBotPaused(userId)) {
+          log.info('bot_pause.skipped_image', { userId });
+          return;
+        }
         await notifyAdmin(userId, '[ลูกค้าส่งรูปภาพ]', 'ลูกค้าส่งรูป (น่าจะเป็นสลิปโอนเงิน) — ตรวจสลิปและยืนยันการจองใน LINE OA Manager');
         await replyWithRetry(
           event.replyToken!,
@@ -79,6 +85,12 @@ export async function POST(req: Request) {
       const driver = await findDriverByLineId(userId);
       if (driver) {
         await handleDriverMessage(driver, userMessage, event.replyToken!);
+        return;
+      }
+
+      // แชมป์กดพักบอทลูกค้าคนนี้ (เข้ามาตอบเอง) → บอทเงียบ ไม่เรียก Gemini ไม่บันทึกประวัติ (lib/pause.ts)
+      if (await isBotPaused(userId)) {
+        log.info('bot_pause.skipped', { userId });
         return;
       }
 

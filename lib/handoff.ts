@@ -3,6 +3,7 @@
 import { Client } from '@line/bot-sdk';
 import { log } from './log';
 import { sendTelegramMessage } from './telegram';
+import { pauseCallbackData, PAUSE_MINUTES } from './pause';
 
 const HANDOFF_TRIGGERS = [
   'คุยกับแชมป์',
@@ -93,6 +94,8 @@ export async function notifyAdmin(
   }
 
   // 2) Telegram ของแชมป์ (ล้มเหลวจะ log เองใน sendTelegramMessage ไม่ throw)
+  // ปุ่ม "พักบอท" — LINE ไม่บอกบอทเมื่อแชมป์พิมพ์ตอบใน OA Manager จึงให้แชมป์กดพักเอง (lib/pause.ts)
+  const pauseData = pauseCallbackData(userId);
   try {
     await sendTelegramMessage(
       [
@@ -102,7 +105,8 @@ export async function notifyAdmin(
         'UserID: <code>' + escapeHtml(userId) + '</code>',
         '',
         'ตอบที่ LINE OA Manager: ' + manager,
-      ].join('\n')
+      ].join('\n'),
+      pauseData ? [[{ text: `⏸ พักบอท ${PAUSE_MINUTES} นาที (ผมตอบเอง)`, callback_data: pauseData }]] : undefined
     );
   } catch (err) {
     log.error('handoff.telegram_failed', { err: (err as Error).message });

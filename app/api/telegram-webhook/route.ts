@@ -19,6 +19,7 @@ import { getLeaveRequest, resolveLeaveRequest } from '@/lib/leave';
 import { markNeedsReassignment } from '@/lib/assignments';
 import { invalidateJobsCache } from '@/lib/job-availability';
 import { monthsInRollingRange } from '@/lib/date-range';
+import { pauseBot, resumeBot, formatPauseEnd } from '@/lib/pause';
 import { log } from '@/lib/log';
 
 export const runtime = 'nodejs';
@@ -251,6 +252,24 @@ export async function POST(req: Request) {
           );
         }
       }
+    } else if (action === 'pause') {
+      // ปุ่ม "พักบอท" จากข้อความแจ้งเตือนลูกค้า — แชมป์เข้ามาตอบเอง บอทเงียบกับลูกค้าคนนี้ 30 นาที
+      const [lineUserId] = rest;
+      const until = await pauseBot(lineUserId);
+      if (until === null) {
+        await answerCallbackQuery(cq.id, 'พักบอทไม่สำเร็จ (Redis) ลองใหม่ครับ');
+      } else {
+        await answerCallbackQuery(cq.id, `พักบอทแล้ว ถึง ${formatPauseEnd(until)} ⏸`);
+        await sendTelegramMessage(
+          `⏸ พักบอทกับลูกค้าคนนี้แล้ว — บอทจะกลับมาตอบเองตอน ${formatPauseEnd(until)} น.\nUserID: <code>${lineUserId}</code>`,
+          [[{ text: '▶️ เปิดบอทกลับเลย', callback_data: `resume:${lineUserId}` }]]
+        );
+      }
+    } else if (action === 'resume') {
+      const [lineUserId] = rest;
+      await resumeBot(lineUserId);
+      await answerCallbackQuery(cq.id, 'เปิดบอทกลับแล้ว ▶️');
+      await sendTelegramMessage(`▶️ เปิดบอทกับลูกค้าคนนี้กลับแล้ว\nUserID: <code>${lineUserId}</code>`);
     } else if (action === 'pz_rej') {
       const p = await rejectPlace(rest[0]);
       await answerCallbackQuery(cq.id, p ? 'ลบแล้ว' : 'ไม่พบรายการนี้');
