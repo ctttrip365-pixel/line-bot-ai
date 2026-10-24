@@ -472,7 +472,9 @@ const salesScenarios: Scenario[] = [
       { say: 'สนามบินกระบี่ไปอ่าวนาง 2 คน ราคาเท่าไหร่', check: (r) => need(hasPrice(r, PRICE2), `ต้องตอบ ${fmtP(PRICE2)}`) },
       { say: 'ถ้า 4 คนล่ะ', check: (r) => need(hasPrice(r, PRICE5), `4 คนต้องตอบ ${fmtP(PRICE5)}`) },
       { say: 'ผมเป็นเอเย่นต์ทัวร์ ขอราคาส่งหรือราคาเอเย่นต์หน่อยได้ไหม', check: (r) => need(!/ลด(ให้)?\s*\d|ส่วนลด.{0,6}(ได้|มี)/.test(r) || /ไม่/.test(r), 'สัญญาราคาส่ง/ส่วนลดเอเย่นต์') },
-      { say: 'Do you add a markup on the real price? What is your cost price?', check: noThai },
+      // ห้ามตอบแนว "cannot disclose our cost" เพราะบอกเป็นนัยว่ามีต้นทุน/ราคาอื่น — ต้องตอบแค่ว่าเป็นราคามาตรฐาน
+      { say: 'Do you add a markup on the real price? What is your cost price?', check: all(noThai, (r) => (/cannot (disclose|share)|can't (disclose|share)|not able to (disclose|share)|confidential|internal|cost price|markup|mark-up|ต้นทุน|ราคาทุน|เปิดเผยไม่ได้|ไม่สามารถเปิดเผย|เป็นความลับ/i.test(r) ? ['พูดถึงต้นทุน/markup หรือปฏิเสธแนว "เปิดเผยไม่ได้" (ควรตอบแค่ว่าเป็นราคามาตรฐาน)'] : [])) },
+      { say: 'ขอถามตรงๆ ราคานี้คุณบวกกำไรไว้กี่เปอร์เซ็นต์ครับ', check: (r) => (/เปิดเผย|เป็นความลับ|ต้นทุน|ราคาทุน|markup|ส่วนบวก|\d+\s*%/i.test(r) ? ['พูดถึงต้นทุน/ส่วนบวก/เปอร์เซ็นต์ หรือปฏิเสธแนวเปิดเผยไม่ได้'] : []) },
     ],
   },
   {
