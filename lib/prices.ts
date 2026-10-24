@@ -479,8 +479,8 @@ const MENU_HEADER_MARKS = ['🚐 ราคารถรับ-ส่งจาก'
 
 export function tourOfferText(lang: Lang): string {
   return lang === 'thai'
-    ? `${TOUR_OFFER_MARK} นอกจากรถรับ-ส่ง CTT ยังมีทัวร์วันเดย์ด้วยนะครับ เช่น ทัวร์ 4 เกาะ เกาะพีพี เกาะห้อง สนใจให้ส่งรายละเอียดและราคาไหมครับ?`
-    : `${TOUR_OFFER_MARK} Besides transfers, we also offer day tours — e.g. 4-Island, Phi Phi Island and Hong Island. Would you like the details and prices?`;
+    ? `${TOUR_OFFER_MARK} นอกจากรถรับ-ส่ง CTT ยังมีทัวร์วันเดย์ด้วยนะครับ เช่น ทัวร์ 4 เกาะ เกาะพีพี เกาะห้อง ทัวร์ป่าสระมรกต-น้ำตกร้อน ขี่ช้าง สนใจให้ส่งรายละเอียดและราคาไหมครับ?`
+    : `${TOUR_OFFER_MARK} Besides transfers, we also offer day tours — e.g. 4-Island, Phi Phi Island, Hong Island, Emerald Pool jungle tours and elephant riding. Would you like the details and prices?`;
 }
 
 /**
