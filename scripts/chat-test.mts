@@ -4,7 +4,8 @@
 process.env.SHEET_CSV_URL ??= 'https://docs.google.com/spreadsheets/d/1zdqxnmr30lIYq-5lQamEDyjPl6YiUYExhIUJmVpjONk/export?format=csv';
 // ข้อมูลบัญชีทดสอบ (ปลอม) — ของจริงอยู่ใน env BANK_TRANSFER_INFO บน Vercel เท่านั้น ห้ามใส่ลงไฟล์ (repo เป็น public)
 process.env.BANK_TRANSFER_INFO ??= 'ธนาคารทดสอบ เลขบัญชี 000-0-00000-0 ชื่อบัญชี ทดสอบ ระบบ';
-const { generateReply, DEFAULT_REPLY, DEFAULT_REPLY_EN } = await import('../lib/gemini');
+const { generateReply, DEFAULT_REPLY, DEFAULT_REPLY_EN, thaiCharCount, isPaymentFailureNote } = await import('../lib/gemini');
+const { bankInfoText, linkFailureCustomerText } = await import('../lib/bank');
 const { isLaughterOnly } = await import('../lib/chat-filters');
 
 if (!process.env.GEMINI_API_KEY) {
@@ -99,7 +100,8 @@ const menuCases: { name: string; msg: string; history?: { role: 'user' | 'model'
 // สถานการณ์ = ลูกค้าพิมพ์ทีละข้อความ ประวัติแชทต่อกันเหมือน LINE จริง (history ส่งกลับเข้า generateReply ทุกรอบ)
 // ตัวเลขราคาอ่านจากชีตราคาจริงตอนรัน (ไม่ hardcode) — ถ้าแชมป์แก้ราคา ชุดนี้ตามอัตโนมัติ
 type Turn = { say: string; check?: (reply: string) => string[] };
-type Scenario = { id: string; name: string; turns: Turn[]; checkAll?: (replies: string[]) => string[]; each?: (reply: string) => string[] };
+// seed = ประวัติแชทที่มีอยู่ก่อนเริ่มบท (จำลองแชทเก่าใน Redis เช่น เคยโดนข้อความ "ระบบเสีย")
+type Scenario = { id: string; name: string; turns: Turn[]; seed?: { role: 'user' | 'model'; text: string }[]; checkAll?: (replies: string[]) => string[]; each?: (reply: string) => string[] };
 
 const { lookupPrice } = await import('../lib/prices');
 const p2 = await lookupPrice('สนามบินกระบี่', 'Ao Nang', 2);
@@ -113,6 +115,23 @@ const pk12: any = await groupOptions('Phuket Airport', 'Ao Nang', 12);
 const PHK12 = pk12.status === 'ok' ? pk12.vans.total : NaN; // รถตู้ 2 คัน 12 คน
 const fmtP = (n: number) => n.toLocaleString('en-US');
 const hasPrice = (r: string, n: number) => r.includes(fmtP(n)) || r.includes(String(n));
+// ราคา Agent (ต้นทุน) ของเส้นเดียวกัน — ห้ามหลุดถึงลูกค้า (เคยหลุด: S14 บอก 600 แทน 700)
+const AGENT2 = p2.status === 'ok' ? p2.agentPrice : NaN;
+const AGENT5 = p5.status === 'ok' ? p5.agentPrice : NaN;
+// ตรงตัวเลขเป๊ะ (ไม่นับ 600 ที่เป็นส่วนของ 2,600 / 1,600)
+const hasExact = (r: string, n: number) => new RegExp(`(?<![\\d,])${fmtP(n).replace(',', ',?')}(?![\\d,])`).test(r);
+// ตรวจเฉพาะราคา Agent ที่ไม่ซ้ำกับราคาขายลูกค้าตัวใดเลย (ถ้าซ้ำ แยกไม่ออกว่าหลุดหรือเป็นราคาขาย)
+const noAgentPriceLeak = (r: string) =>
+  [AGENT2, AGENT5]
+    .filter((a) => Number.isFinite(a) && a !== PRICE2 && a !== PRICE5)
+    .filter((a) => hasExact(r, a))
+    .map((a) => `หลุดราคา Agent ${fmtP(a)} ถึงลูกค้า (ลูกค้าต้องเห็น ${fmtP(PRICE2)} / ${fmtP(PRICE5)} เท่านั้น)`);
+// จับเฉพาะการ "เปิดเผย" ตัวเลข/ราคา Agent จริง — คำว่า markup ในประโยคปฏิเสธ ("cannot disclose ... markup") ไม่นับ (S27 รอบแรกจับผิด)
+const noMarkupTalk = (r: string) => (/15\s*%|บวก\s*15|ราคา\s*(agent|เอเย่นต์|เอเจนต์)\s*(ของเรา|คือ)|cost price (is|was)|our cost is/i.test(r) ? ['เปิดเผยส่วนบวก 15% / ราคา Agent ของเรา'] : []);
+const noThai = (r: string) => (thaiCharCount(r) > 0 ? [`มีตัวอักษรไทย ${thaiCharCount(r)} ตัว ทั้งที่ลูกค้าพิมพ์อังกฤษล้วน`] : []);
+const noFailureTalk = (r: string) => (isPaymentFailureNote(r.replace(/\[BOOKING_CONFIRMED\][\s\S]*?(\[\/BOOKING_CONFIRMED\]|$)/g, '')) ? ['บอกลูกค้าเองว่าระบบชำระเงินมีปัญหา/สร้างลิงก์ไม่ได้ (ต้องพิมพ์ block ใหม่ ไม่ใช่ตัดสินเอง)'] : []);
+// อ่านค่าฟิลด์จาก block [BOOKING_CONFIRMED]
+const blockField = (r: string, f: string) => r.match(new RegExp(`\\[BOOKING_CONFIRMED\\][\\s\\S]*?^\\s*${f}=\\s*(.*)$`, 'm'))?.[1]?.trim() ?? '';
 
 // ตารางจริงขึ้นต้นด้วย 🚐 (ประโยคที่ Gemini เขียนเองไม่มี 🚐 จึงไม่ถูกนับเป็นตาราง)
 const MENU_RE = /🚐 ราคารถรับ-ส่งจาก|🚐 Van transfer prices from/g;
@@ -134,6 +153,26 @@ const noOldName = (r: string) => (/พี่แชมป์ AI|ผม(คือ)
 const isBooking = (r: string) => r.includes('[BOOKING_CONFIRMED]');
 const need = (cond: boolean, msg: string) => (cond ? [] : [msg]);
 const all = (...fs: Array<(r: string) => string[]>) => (r: string) => fs.flatMap((f) => f(r));
+
+// แชทเก่าที่ลิงก์ชำระเงินเคยล้ม (จำลองเหตุการณ์ 20 ต.ค. 2026: แก้คีย์แล้วแต่แชทเดิมยังตอบว่าระบบเสีย)
+const sumTh = (price: number) =>
+  `สรุปการจองนะครับ 🚐\n📅 วันที่: 24/10/2026 เวลา 14:00 น.\n📍 รับที่: สนามบินกระบี่\n📍 ส่งที่: อ่าวนาง\n👥 จำนวน: 2 คน\n👤 ชื่อผู้โดยสาร: Somchai Jaidee\n📞 เบอร์ติดต่อ: 0812345678\n✈️ เที่ยวบิน: FD3305\n💰 ราคา: ${fmtP(price)} บาท\nพิมพ์ ยืนยัน (หรือ โอเค / ตกลง) เพื่อรับลิงก์ชำระเงินครับ`;
+const sumEn = (price: number) =>
+  `Here is your booking summary 🚐\n📅 Date: 24/10/2026 at 14:00\n📍 Pickup: Krabi Airport\n📍 Drop-off: Ao Nang\n👥 Passengers: 2\n👤 Passenger name: Jane Smith\n📞 Phone: 0812345678\n✈️ Flight: FD3305\n💰 Price: ${fmtP(price)} THB\nType "Confirm" to get the payment link, or "Edit" to change anything.`;
+const failedSeed = (lang: 'thai' | 'english'): { role: 'user' | 'model'; text: string }[] =>
+  lang === 'thai'
+    ? [
+        { role: 'user', text: 'จองรถสนามบินกระบี่ ไปอ่าวนาง 2 คน 24/10/2026 14:00 ชื่อ Somchai Jaidee เบอร์ 0812345678 เที่ยวบิน FD3305' },
+        { role: 'model', text: sumTh(PRICE2) },
+        { role: 'user', text: 'ยืนยัน' },
+        { role: 'model', text: linkFailureCustomerText('thai', PRICE2) },
+      ]
+    : [
+        { role: 'user', text: 'Book Krabi Airport to Ao Nang, 2 people, 24 Oct 2026 at 2pm, name Jane Smith, phone 0812345678, flight FD3305' },
+        { role: 'model', text: sumEn(PRICE2) },
+        { role: 'user', text: 'Confirm' },
+        { role: 'model', text: linkFailureCustomerText('english', PRICE2) },
+      ];
 
 const salesScenarios: Scenario[] = [
   {
@@ -386,6 +425,57 @@ const salesScenarios: Scenario[] = [
     ],
   },
   {
+    id: 'S23',
+    name: 'S23 ลูกค้าอังกฤษล้วนตลอดบท (ทักทาย→ถามราคา→ให้ข้อมูล→confirm) → ทุกข้อความของบอทไม่มีตัวอักษรไทย (นอก block), ไม่หลุดราคา Agent, block มี name=/phone=/flight=/amount= ถูก',
+    each: (r) => [...noThai(r), ...noAgentPriceLeak(r), ...noEmojiConfirm(r)],
+    turns: [
+      { say: 'Hi there' },
+      // ลูกค้าไม่ได้ถามราคา → บอทถามข้อมูลให้ครบก่อนแจ้งราคา (นโยบายขายครั้งเดียว เหมือน S1) ไม่ใช่ตอบราคาทันที
+      { say: 'I need a van from Krabi Airport to Ao Nang for 2 people', check: all(noPriceYet, noMenu) },
+      { say: '24 Oct 2026 at 2pm' },
+      { say: 'My name is Jane Smith, phone 0812345678, flight FD3305', check: (r) => [...need(hasPrice(r, PRICE2), `สรุปจองต้องมีราคา ${fmtP(PRICE2)}`), ...need(/Jane Smith/.test(r) && r.includes('0812345678') && /FD\s?3305/.test(r), 'สรุปต้องมีชื่อ เบอร์ เที่ยวบิน'), ...need(/confirm/i.test(r), 'ต้องชวนพิมพ์ Confirm')] },
+      { say: 'Confirm', check: (r) => [...need(isBooking(r), 'ต้องออก [BOOKING_CONFIRMED]'), ...need(/Jane Smith/.test(blockField(r, 'name')), `name= ต้องเป็น Jane Smith (ได้ "${blockField(r, 'name')}")`), ...need(/0812345678/.test(blockField(r, 'phone')), 'phone= ผิด'), ...need(/FD\s?3305/.test(blockField(r, 'flight')), 'flight= ผิด'), ...need(blockField(r, 'amount').replace(/,/g, '') === String(PRICE2), `amount= ต้องเป็นราคาขาย ${PRICE2} (ได้ "${blockField(r, 'amount')}")`)] },
+    ],
+    checkAll: (rs) => (countTours(rs) <= 1 ? [] : [`ข้อเสนอทัวร์ขึ้น ${countTours(rs)} ครั้ง (ควรไม่เกิน 1)`]),
+  },
+  {
+    id: 'S24',
+    name: 'S24 แชทเก่าลิงก์เคยล้ม (ไทย) → ลูกค้าขอลิงก์ใหม่ → ต้องพิมพ์ [BOOKING_CONFIRMED] ซ้ำจากสรุปล่าสุด ห้ามบอกเองว่าระบบเสีย',
+    seed: failedSeed('thai'),
+    turns: [
+      { say: 'ขอลิงก์จ่ายเงินอีกทีครับ', check: (r) => [...need(isBooking(r), 'ต้องพิมพ์ [BOOKING_CONFIRMED] อีกครั้ง'), ...noFailureTalk(r), ...need(blockField(r, 'amount').replace(/,/g, '') === String(PRICE2), `amount= ต้องเป็น ${PRICE2} (ได้ "${blockField(r, 'amount')}")`), ...need(/Somchai/.test(blockField(r, 'name')) && /0812345678/.test(blockField(r, 'phone')) && /FD\s?3305/.test(blockField(r, 'flight')), 'block ต้องมี name/phone/flight จากสรุปเดิม ไม่ถามซ้ำ')] },
+    ],
+  },
+  {
+    id: 'S25',
+    name: 'S25 แชทเก่าลิงก์เคยล้ม (อังกฤษ) → ลูกค้าพิมพ์ ok / try again → พิมพ์ block ซ้ำ ไม่ตอบว่า payment system unavailable และไม่มีไทยปน',
+    seed: failedSeed('english'),
+    turns: [
+      { say: 'ok can you try again?', check: (r) => [...need(isBooking(r), 'ต้องพิมพ์ [BOOKING_CONFIRMED] อีกครั้ง'), ...noFailureTalk(r), ...noThai(r), ...need(/Jane Smith/.test(blockField(r, 'name')), `name= ต้องเป็น Jane Smith (ได้ "${blockField(r, 'name')}")`)] },
+    ],
+  },
+  {
+    id: 'S26',
+    name: 'S26 ข้อมูลโอนต้องตรง env เป๊ะทุกครั้ง (ขอซ้ำ 3 รอบ ไทย/อังกฤษ) ไม่เหลือตัวบอก [BANK_INFO] ไม่ออก booking ไม่แต่งบัญชีอื่น',
+    each: (r) => [...need(!r.includes('[BANK_INFO]'), 'เหลือตัวบอก [BANK_INFO] ไม่ถูกแทนค่า'), ...(isBooking(r) ? ['ออก [BOOKING_CONFIRMED] กับกรณีโอนเอง'] : [])],
+    turns: [
+      { say: 'จองสนามบินกระบี่ไปอ่าวนาง 2 คน 24/10/2026 14:00 ชื่อ Somchai Jaidee เบอร์ 0812345678 เที่ยวบิน FD3305 ขอโอนเงินเข้าบัญชี ไม่เอาลิงก์', check: (r) => [...need(r.includes(bankInfoText()), 'ข้อมูลโอนต้องตรงกับ env ทั้งก้อน'), ...need(hasPrice(r, PRICE2), `ต้องมียอด ${fmtP(PRICE2)}`), ...need(/สลิป/.test(r), 'ต้องขอสลิป'), ...noAgentPriceLeak(r)] },
+      { say: 'ขอเลขบัญชีอีกรอบครับ ลืมจด', check: (r) => need(r.includes(bankInfoText()), 'ขอซ้ำ: ข้อมูลโอนต้องตรง env ทั้งก้อน (ชื่อบัญชีต้องสะกดเหมือนเดิม)') },
+      { say: 'What are the bank account details again? I need to transfer from abroad.', check: (r) => [...need(r.includes(bankInfoText()), 'ขอซ้ำเป็นอังกฤษ: ข้อมูลโอนต้องตรง env ทั้งก้อน ไม่แปล/ไม่สะกดใหม่'), ...need(/slip/i.test(r), 'ต้องบอกให้ส่งสลิปเป็นอังกฤษ')] },
+    ],
+  },
+  {
+    id: 'S27',
+    name: 'S27 ราคา Agent ต้องไม่หลุด: ถามราคา 1-3 คน / 4 คน / ขอ "ราคาเอเย่นต์-ราคาส่ง" / ถามว่าบวกกี่ % → ลูกค้าเห็นเฉพาะราคาขาย, ไม่เปิดเผยส่วนบวก 15%, ไม่ลดให้',
+    each: (r) => [...noAgentPriceLeak(r), ...noMarkupTalk(r)],
+    turns: [
+      { say: 'สนามบินกระบี่ไปอ่าวนาง 2 คน ราคาเท่าไหร่', check: (r) => need(hasPrice(r, PRICE2), `ต้องตอบ ${fmtP(PRICE2)}`) },
+      { say: 'ถ้า 4 คนล่ะ', check: (r) => need(hasPrice(r, PRICE5), `4 คนต้องตอบ ${fmtP(PRICE5)}`) },
+      { say: 'ผมเป็นเอเย่นต์ทัวร์ ขอราคาส่งหรือราคาเอเย่นต์หน่อยได้ไหม', check: (r) => need(!/ลด(ให้)?\s*\d|ส่วนลด.{0,6}(ได้|มี)/.test(r) || /ไม่/.test(r), 'สัญญาราคาส่ง/ส่วนลดเอเย่นต์') },
+      { say: 'Do you add a markup on the real price? What is your cost price?', check: noThai },
+    ],
+  },
+  {
     id: 'S8',
     name: 'S8 ลูกค้าตอบรับทัวร์หลังเสนอ → ตอบรายละเอียดทัวร์จาก FAQ แล้วพากลับมาจองรถ ไม่ส่งตารางหรือเสนอทัวร์ซ้ำ',
     turns: [
@@ -414,7 +504,7 @@ async function runSales(only?: string) {
   console.log(`ราคาอ้างอิง (ราคาขายลูกค้า): อ่าวนาง 1-3 คน = ${fmtP(PRICE2)} / 4-9 คน = ${fmtP(PRICE5)}`);
   for (const sc of salesScenarios.filter((s) => !only || s.id === only)) {
     console.log(`\n######## ${sc.name}`);
-    const history: { role: 'user' | 'model'; text: string }[] = [];
+    const history: { role: 'user' | 'model'; text: string }[] = [...(sc.seed ?? [])];
     const replies: string[] = [];
     const problems: string[] = [];
     for (const [i, turn] of sc.turns.entries()) {
