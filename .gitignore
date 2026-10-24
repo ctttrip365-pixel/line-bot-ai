@@ -143,3 +143,8 @@ vite.config.ts.timestamp-*
 .vite/
 .vercel
 .env*
+
+# macOS / ไฟล์ที่สร้างอัตโนมัติ (ไม่เก็บใน repo)
+.DS_Store
+next-env.d.ts
+package-lock.json
