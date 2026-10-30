@@ -31,8 +31,8 @@ import { runDispatchMatch } from './dispatch-match';
 import { isDispatchAutoMatchEnabled } from './settings';
 import { log } from './log';
 
-// สวิตช์ auto_dispatch_enabled = FALSE (แท็บ Settings) = ปิดรับวันว่าง/เลือกงานจากคนขับชั่วคราว (แชมป์จัดคนขับเองทาง Telegram)
-const AVAILABILITY_CLOSED_TEXT = 'ตอนนี้ยังไม่เปิดให้ส่งวันว่าง/เลือกงานครับ แชมป์จะจัดงานให้เองก่อน — ถ้าต้องการขอลา พิมพ์ "ขอลา" หรือดูงานของตัวเองพิมพ์ "เช็คงาน" ได้ตามปกติครับ 🙏';
+// สวิตช์ auto_dispatch_enabled = FALSE (แท็บ Settings) = คนขับ "ดูวันว่าง/งาน" ได้ แต่ส่งวันว่าง/เลือกงานไม่ได้ชั่วคราว (แชมป์จัดคนขับเองทาง Telegram)
+const AVAILABILITY_CLOSED_TEXT = 'ตอนนี้ยังไม่เปิดให้ส่งวันว่าง/เลือกงานครับ แชมป์จะจัดงานให้เองก่อน — ดูวันว่างได้อย่างเดียว ถ้าต้องการขอลา พิมพ์ "ขอลา" หรือดูงานของตัวเองพิมพ์ "เช็คงาน" ได้ตามปกติครับ 🙏';
 
 function getLineClient() {
   return new Client({
@@ -104,13 +104,12 @@ export async function handleDriverMessage(
   }
 
   if (text.includes('วันว่าง')) {
-    if (!(await isDispatchAutoMatchEnabled())) {
-      await reply(replyToken, { type: 'text', text: AVAILABILITY_CLOSED_TEXT });
-      return;
-    }
+    // ปิดรับอยู่ = ยังให้ดูการ์ดวันว่าง/งานได้ (อ่านอย่างเดียว) แต่แนบข้อความบอกว่าเลือก/ส่งไม่ได้ — ปุ่มเลือก/ส่งโดนบล็อกใน handleDriverPostback
+    const closed = !(await isDispatchAutoMatchEnabled());
     const dates = rollingDateRange();
-    const [selected, jobsByDate] = await Promise.all([getSelectedDates(driver.driver_id), combinedJobsByDate()]);
-    await reply(replyToken, buildAvailabilityCarousel(dates, selected, jobsByDate));
+    const [selected, jobsByDate] = await Promise.all([closed ? Promise.resolve([] as string[]) : getSelectedDates(driver.driver_id), combinedJobsByDate()]);
+    const carousel = buildAvailabilityCarousel(dates, selected, jobsByDate);
+    await reply(replyToken, closed ? [{ type: 'text', text: AVAILABILITY_CLOSED_TEXT }, carousel] : carousel);
     return;
   }
 
