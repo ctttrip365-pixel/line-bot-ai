@@ -31,6 +31,9 @@ import { runDispatchMatch } from './dispatch-match';
 import { isDispatchAutoMatchEnabled } from './settings';
 import { log } from './log';
 
+// สวิตช์ auto_dispatch_enabled = FALSE (แท็บ Settings) = ปิดรับวันว่าง/เลือกงานจากคนขับชั่วคราว (แชมป์จัดคนขับเองทาง Telegram)
+const AVAILABILITY_CLOSED_TEXT = 'ตอนนี้ยังไม่เปิดให้ส่งวันว่าง/เลือกงานครับ แชมป์จะจัดงานให้เองก่อน — ถ้าต้องการขอลา พิมพ์ "ขอลา" หรือดูงานของตัวเองพิมพ์ "เช็คงาน" ได้ตามปกติครับ 🙏';
+
 function getLineClient() {
   return new Client({
     channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN!,
@@ -101,6 +104,10 @@ export async function handleDriverMessage(
   }
 
   if (text.includes('วันว่าง')) {
+    if (!(await isDispatchAutoMatchEnabled())) {
+      await reply(replyToken, { type: 'text', text: AVAILABILITY_CLOSED_TEXT });
+      return;
+    }
     const dates = rollingDateRange();
     const [selected, jobsByDate] = await Promise.all([getSelectedDates(driver.driver_id), combinedJobsByDate()]);
     await reply(replyToken, buildAvailabilityCarousel(dates, selected, jobsByDate));
@@ -159,6 +166,11 @@ export async function handleDriverPostback(
   const [action, ...rest] = data.split(':');
 
   if (action === 'avail' && rest[0] === 'pick') {
+    // การ์ดเก่าที่คนขับยังเปิดค้างอยู่ — ปิดรับแล้วไม่ให้ติ๊กเพิ่ม
+    if (!(await isDispatchAutoMatchEnabled())) {
+      await reply(replyToken, { type: 'text', text: AVAILABILITY_CLOSED_TEXT });
+      return;
+    }
     const [, token] = rest;
     const [date, eventId] = token.split('#');
     const jobs = (await getJobsForMonth(date.slice(0, 7)))[date] ?? [];
