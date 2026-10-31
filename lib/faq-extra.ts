@@ -293,6 +293,69 @@ export const EXTRA_FAQ: ExtraFaqRow[] = [
     answer:
       'Elephant riding in Ao Nang, price per person: 30 minutes adult 900 THB / child 600 THB • 1 hour adult 1,500 THB / child 1,000 THB. Champ will check the transport and the child age limit for you when you book. Tell us the date and number of guests if you would like to go.',
   },
+  // ---- ปางช้างแบบดูแลช้าง (sanctuary) 4 โปรแกรม A-D (แชมป์ให้เพิ่ม 31 ต.ค. 2026 จากใบคอนแทรคของปาง) ----
+  // ราคาในกลุ่มนี้ = Price on Sale (ราคาขายลูกค้า) ของปาง ต่อคน ไม่บวก 15% — ห้ามใส่ราคา Net, ชื่อปาง และเบอร์ของปาง (repo นี้ public)
+  // ยังไม่ยืนยัน (ห้ามเดา): โปรแกรม D รวมค่าอุทยานสระมรกต/น้ำตกร้อนหรือไม่ (โบรชัวร์บอกรวม แต่ใบราคาไม่ระบุ)
+  {
+    category: 'ทัวร์และการท่องเที่ยว',
+    question: 'ปางช้างกระบี่ ให้อาหารช้าง อาบน้ำช้าง เดินป่ากับช้าง โคลนสปา ช้างไม่ขี่ มีโปรแกรมอะไรบ้าง ราคาเท่าไหร่',
+    answer:
+      'ปางช้างแบบดูแลช้างในกระบี่ มี 4 โปรแกรม ราคาต่อคน (ผู้ใหญ่ / เด็ก 4-10 ปี) รวมรถรับ-ส่งโรงแรม ผลไม้ น้ำดื่ม ประกัน: A ประมาณ 1.30 ชม. 1,700 / 1,300 บาท • B ประมาณ 3 ชม. 2,300 / 1,700 บาท • C ประมาณ 3 ชม. 2,400 / 1,800 บาท • D เต็มวัน 7-8 ชม. (รวมมื้อเที่ยง + สระมรกต + น้ำตกร้อน) 4,000 / 3,000 บาท ต้องจองล่วงหน้า ถ้าสนใจโปรแกรมไหน บอกวันและจำนวนคน (ผู้ใหญ่/เด็ก) ได้เลยครับ',
+  },
+  {
+    category: 'Tours & Activities',
+    question: 'Elephant sanctuary in Krabi feeding bathing walking with elephants mud spa no riding programs and prices',
+    answer:
+      'Elephant sanctuary programs in Krabi, price per person (adult / child 4-10 years), including hotel transfer, fruits, drinking water and insurance: Program A about 1.30 hrs 1,700 / 1,300 THB • Program B about 3 hrs 2,300 / 1,700 THB • Program C about 3 hrs 2,400 / 1,800 THB • Program D full day 7-8 hrs (with lunch + Emerald Pool + Hot Spring Waterfall) 4,000 / 3,000 THB. Advance booking is required. Tell us the date and number of guests (adults/children) if you would like to book.',
+  },
+  {
+    category: 'ทัวร์และการท่องเที่ยว',
+    question: 'ปางช้าง โปรแกรม A ประมาณ 1.30 ชั่วโมง ทักทายช้าง ให้อาหารช้าง เดินป่า โคลนสปา อาบน้ำช้าง ราคา',
+    answer:
+      'ปางช้าง โปรแกรม A ประมาณ 1.30 ชั่วโมง ผู้ใหญ่ 1,700 บาท / เด็ก (4-10 ปี) 1,300 บาท ต่อคน: ทักทายช้าง ให้อาหารช้าง เดินป่ากับช้าง โคลนสปา และอาบน้ำกับช้าง รวมรถรับ-ส่งโรงแรม ผลไม้ น้ำดื่ม ประกัน รอบรับ 07:30-08:00, 11:00-11:30 หรือ 13:00-13:30 ต้องจองล่วงหน้า',
+  },
+  {
+    category: 'Tours & Activities',
+    question: 'Elephant sanctuary Program A about 1.30 hours greeting feeding forest walk mud spa bathing price',
+    answer:
+      'Elephant sanctuary Program A, about 1.30 hours, adult 1,700 THB / child (4-10 years) 1,300 THB per person: greeting the elephants, feeding, forest walk, mud spa and bathing with your elephant. Includes hotel transfer, fruits, drinking water and insurance. Pick-up at 07:30-08:00, 11:00-11:30 or 13:00-13:30. Advance booking is required.',
+  },
+  {
+    category: 'ทัวร์และการท่องเที่ยว',
+    question: 'ปางช้าง โปรแกรม B ประมาณ 3 ชั่วโมง เดินป่ากับลูกช้าง เตรียมอาหารและยาสมุนไพรให้ช้าง อาบน้ำช้างในแม่น้ำ ราคา',
+    answer:
+      'ปางช้าง โปรแกรม B ประมาณ 3 ชั่วโมง ผู้ใหญ่ 2,300 บาท / เด็ก (4-10 ปี) 1,700 บาท ต่อคน: ทักทายและให้อาหารช้าง เดินป่ากับช้างและลูกช้าง เตรียมอาหารและยาสมุนไพรให้ช้าง โคลนสปา และอาบน้ำกับช้างในแม่น้ำ รวมรถรับ-ส่งโรงแรม ผลไม้ น้ำดื่ม ประกัน รอบรับ 07:30-08:00 หรือ 13:00-13:30 ต้องจองล่วงหน้า',
+  },
+  {
+    category: 'Tours & Activities',
+    question: 'Elephant sanctuary Program B about 3 hours baby elephant herbal medicine bathing in the river price',
+    answer:
+      'Elephant sanctuary Program B, about 3 hours, adult 2,300 THB / child (4-10 years) 1,700 THB per person: greeting and feeding the elephants, forest walk with elephants and baby elephants, preparing food and herbal medicine for the elephants, mud spa and bathing with your elephant in the river. Includes hotel transfer, fruits, drinking water and insurance. Pick-up at 07:30-08:00 or 13:00-13:30. Advance booking is required.',
+  },
+  {
+    category: 'ทัวร์และการท่องเที่ยว',
+    question: 'ปางช้าง โปรแกรม C ประมาณ 3 ชั่วโมง ทำกระดาษจากมูลช้าง ดูแลผิวช้าง ราคา',
+    answer:
+      'ปางช้าง โปรแกรม C ประมาณ 3 ชั่วโมง ผู้ใหญ่ 2,400 บาท / เด็ก (4-10 ปี) 1,800 บาท ต่อคน: กิจกรรมแบบโปรแกรม B เพิ่มการดูแลผิวช้าง และทำกระดาษจากมูลช้าง (ได้กระดาษกลับบ้านเป็นของที่ระลึก) รวมรถรับ-ส่งโรงแรม ผลไม้ น้ำดื่ม ประกัน รอบรับ 07:30-08:00 หรือ 13:00-13:30 ต้องจองล่วงหน้า',
+  },
+  {
+    category: 'Tours & Activities',
+    question: 'Elephant sanctuary Program C about 3 hours make paper from elephant poo elephant skin care price',
+    answer:
+      'Elephant sanctuary Program C, about 3 hours, adult 2,400 THB / child (4-10 years) 1,800 THB per person: everything in Program B plus taking care of the elephant skin and making paper from elephant poo (you take the paper home as a souvenir). Includes hotel transfer, fruits, drinking water and insurance. Pick-up at 07:30-08:00 or 13:00-13:30. Advance booking is required.',
+  },
+  {
+    category: 'ทัวร์และการท่องเที่ยว',
+    question: 'ปางช้างเต็มวัน โปรแกรม D 7-8 ชั่วโมง ปางช้างกับสระมรกต น้ำตกร้อน อาหารเที่ยงชุดไทย ราคา',
+    answer:
+      'ปางช้าง โปรแกรม D เต็มวัน ประมาณ 7-8 ชั่วโมง ผู้ใหญ่ 4,000 บาท / เด็ก (4-10 ปี) 3,000 บาท ต่อคน: กิจกรรมกับช้างแบบโปรแกรม C + มื้อเที่ยงชุดไทย + แช่น้ำที่สระมรกต + พักผ่อนที่น้ำตกร้อน รวมรถรับ-ส่งโรงแรม ผลไม้ น้ำดื่ม มื้อเที่ยง ประกัน รอบรับ 07:30-08:00 ต้องจองล่วงหน้า ส่วนค่าเข้าอุทยานสระมรกต/น้ำตกร้อนว่ารวมในราคาหรือไม่ ขอให้พี่แชมป์ยืนยันตอนจองครับ',
+  },
+  {
+    category: 'Tours & Activities',
+    question: 'Elephant sanctuary Program D full day 7-8 hours with Emerald Pool and Hot Spring Waterfall Thai set lunch price',
+    answer:
+      'Elephant sanctuary Program D, full day about 7-8 hours, adult 4,000 THB / child (4-10 years) 3,000 THB per person: elephant activities as in Program C + Thai set lunch + swimming at Emerald Pool + relaxing at Hot Spring Waterfall. Includes hotel transfer, fruits, drinking water, lunch and insurance. Pick-up at 07:30-08:00. Advance booking is required. Whether the park entrance fees for Emerald Pool and Hot Spring are covered by the price will be confirmed by Champ when you book.',
+  },
   // ---- ช่องทางติดต่อ (CLAUDE.md §5) ----
   {
     category: 'ข้อมูลการติดต่อ',
