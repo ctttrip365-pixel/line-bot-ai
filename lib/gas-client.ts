@@ -91,7 +91,8 @@ export function listCalendarEvents(fromIso: string, toIso: string, calendarId?: 
 // งาน Daytrip (แอปรับงานคนขับ): ชื่อ event ขึ้นต้น "Daytrip: {รหัส 8 ตัว} | ลูกค้า | ..." (คำเดียวติดกัน ไม่ใช่ "Day Trip" ที่เว้นวรรค)
 // และเดิมบรรทัดรหัสงานเป็น "Booking No (Daytrip):" ที่ไม่มีเครื่องหมาย : ต่อท้าย No — เลยหลุดทุกแพทเทิร์นข้างบน LINE คนขับแสดง "ไม่มีงาน" (27 ต.ค. 2026)
 // ใช้ ^ ผูกกับต้นชื่อเท่านั้น กันชนกับ event อื่นที่แค่พูดถึงคำว่า Daytrip (เช่น นัดสัมภาษณ์เปิดบัญชีกับ Daytrip)
-const BOOKING_PATTERNS: RegExp[] = [/booking no:/i, /\b(vtl|woa)\d+/i, /day trip/i, /^daytrip:/i, /^\[ctt\]/i, /^ctt-\d{6}-[a-z0-9]+/i];
+// Viator: ชื่อ event ขึ้นต้นด้วยเลขอ้างอิง "BR-1234567890" (ผูก ^ และต้องมีเลข 8 หลักขึ้นไป กันชนคำทั่วไป)
+const BOOKING_PATTERNS: RegExp[] = [/booking no:/i, /\b(vtl|woa)\d+/i, /day trip/i, /^daytrip:/i, /^\[ctt\]/i, /^ctt-\d{6}-[a-z0-9]+/i, /^br-\d{8,}\b/i];
 
 /** ใช้เช็คว่า Calendar event นี้คือ "งานจริงที่ต้องมีคนขับ" ไม่ใช่ OFF/reminder/event อื่นที่อยู่ปฏิทินเดียวกัน */
 export function isBookingEvent(ev: CalendarEventSummary): boolean {

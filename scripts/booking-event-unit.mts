@@ -14,6 +14,11 @@ assert.ok(isBookingEvent(ev('Daytrip: 4P1TQQVN | Mr.Luke Holland | A→B | 7 Pax
 assert.equal(isBookingEvent(ev('Book Onboarding Call to activate your account between Daytrip, Alan and sutana saelim')), false);
 assert.equal(isBookingEvent(ev('คุยเรื่อง Daytrip: ต่อประกัน')), false);
 
+// งาน Viator (BR-เลขอ้างอิง) ต้องนับเป็น booking; คำว่า br- ลอยๆ ห้ามนับ
+assert.ok(isBookingEvent(ev('BR-1234567890 | Test Guest | Krabi Airport→Ao Nang | 2 Pax | 15:00 | Viator')));
+assert.equal(isBookingEvent(ev('br-12 ซื้อของ')), false);
+assert.equal(isBookingEvent(ev('นัด BR-1234567890 กับลูกค้า')), false);
+
 // ของเดิมต้องไม่เปลี่ยน
 assert.ok(isBookingEvent(ev('VTL2982 | Mr.Hajajreh Yazid | IslandEscape→Avani Krabi | 2 Pax | 11:00')));
 assert.ok(isBookingEvent(ev('WOA1235 Client Name: Annie GILLOT')));
